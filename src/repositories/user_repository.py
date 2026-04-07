@@ -2,7 +2,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from src.models.user import User
-from types import AnswerRequest
+from pydantic_types import AnswerRequest
 
 
 async def get_users(db: AsyncSession):

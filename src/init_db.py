@@ -1,6 +1,8 @@
 # src/init_db.py
 import asyncio
 import os
+
+from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine
 
 # Importiere Base und zwingend alle Modelle, damit SQLAlchemy sie für create_all registriert
@@ -8,7 +10,14 @@ from src.database.engine import Base
 from src.models.user import User
 from src.models.ip_address import IpAddress
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:1234@localhost:5432/postgres")
+load_dotenv()
+DB_NAME = os.getenv("DB_NAME")
+DB_PW = os.getenv("DB_PW")
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT")
+DB_USER = os.getenv("DB_USER")
+
+DATABASE_URL = os.getenv("DATABASE_URL", f"postgresql+asyncpg://{DB_USER}:{DB_PW}@{DB_HOST}:{DB_PORT}/{DB_NAME}")
 
 
 async def init_models():

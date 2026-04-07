@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.database.engine import engine, Base, get_db
 from src.repositories import user_repository
 import src.models
-from src.types import AnswerRequest
+from src.pydantic_types import AnswerRequest
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
