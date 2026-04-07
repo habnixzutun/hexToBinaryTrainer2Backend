@@ -1,0 +1,27 @@
+# docker-compose.yml
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # Die URL nutzt den Service-Namen "db" aus Docker Compose
+      - DATABASE_URL=postgresql+asyncpg://postgres:DeinGeheimesPasswort@db:5432/hextobin
+    depends_on:
+      db:
+        condition: service_started
+
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=DeinGeheimesPasswort
+      - POSTGRES_DB=hextobin
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
