@@ -29,7 +29,7 @@ app.add_middleware(
 )
 
 
-@app.get("/getLeaderboard", response_model=UserList)
+@app.get("/api/getLeaderboard", response_model=UserList)
 async def get_leaderboard(db: AsyncSession = Depends(get_db)):
     users = await user_repository.get_users(db)
     return {
@@ -44,7 +44,7 @@ async def get_leaderboard(db: AsyncSession = Depends(get_db)):
         ]
     }
 
-@app.post("/correct", response_model=ResultResponse)
+@app.post("/api/correct", response_model=ResultResponse)
 async def correct_answer(request: AnswerRequest, db: AsyncSession = Depends(get_db)):
     user = await user_repository.update_user_data(db, request, is_correct=True)
     return {"message": "Success", "user": UserType(
@@ -55,8 +55,9 @@ async def correct_answer(request: AnswerRequest, db: AsyncSession = Depends(get_
                                         )
             }
 
-@app.post("/incorrect", response_model=ResultResponse)
+@app.post("/api/incorrect", response_model=ResultResponse)
 async def incorrect_answer(request: AnswerRequest, db: AsyncSession = Depends(get_db)):
+    print(request)
     user = await user_repository.update_user_data(db, request, is_correct=False)
     return {"message": "Success", "user": UserType(
                                             name=user.name,

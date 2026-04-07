@@ -19,10 +19,10 @@ async def update_user_data(db: AsyncSession, data: AnswerRequest, is_correct: bo
 
     if is_correct:
         user.correct += 1
-        user.points += user.correct - user.incorrect * 4
+        user.points += user.correct
     else:
         user.incorrect += 1
-        user.points -= user.correct - user.incorrect * 4
+        user.points -= user.incorrect * 4
 
     await db.commit()
     await db.refresh(user)

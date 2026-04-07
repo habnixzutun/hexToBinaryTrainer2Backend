@@ -4,12 +4,10 @@ from pydantic import BaseModel
 class AnswerRequest(BaseModel):
     name: str
     bits: int
-    mode: str
 
     def __str__(self):
-        return (f"Name: {self.name}"
-                f"Bits: {self.bits}"
-                f"Mode: {self.mode}")
+        return (f"Name: {self.name}, "
+                f"Bits: {self.bits}")
 
 class UserType(BaseModel):
     name: str
