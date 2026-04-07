@@ -8,7 +8,7 @@ from src.models import User
 from src.database.engine import engine, Base, get_db
 from src.repositories import user_repository
 import src.models
-from src.pydantic_types import AnswerRequest, UserList, ResultResponse, UserType
+from src.pydantic_types import AnswerRequest, UserList, ResultResponse, UserType, UserRequest
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -29,7 +29,7 @@ app.add_middleware(
 )
 
 
-@app.get("/api/getLeaderboard", response_model=UserList)
+@app.get("/api/leaderboard", response_model=UserList)
 async def get_leaderboard(db: AsyncSession = Depends(get_db)):
     users = await user_repository.get_users(db)
     return {
@@ -43,6 +43,16 @@ async def get_leaderboard(db: AsyncSession = Depends(get_db)):
             for user in users
         ]
     }
+
+@app.post("/api/user", response_model=UserType)
+async def get_user(request: UserRequest, db: AsyncSession = Depends(get_db)):
+    user = await user_repository.get_user(db, request.name)
+    return UserType(
+            name=user.name,
+            correct=user.correct,
+            incorrect=user.incorrect,
+            points=user.points
+        )
 
 @app.post("/api/correct", response_model=ResultResponse)
 async def correct_answer(request: AnswerRequest, db: AsyncSession = Depends(get_db)):

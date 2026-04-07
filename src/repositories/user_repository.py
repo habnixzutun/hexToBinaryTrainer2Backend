@@ -1,15 +1,30 @@
 # src/repositories/user_repository.py
+from typing import Any, Sequence
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from src.models.user import User
 from src.pydantic_types import AnswerRequest
 
 
-async def get_users(db: AsyncSession):
+async def get_users(db: AsyncSession) -> list[User] | Sequence[Any]:
     result = await db.execute(select(User).order_by(User.points.desc(), User.incorrect.asc()).limit(10))
     return result.scalars().all()
 
-async def update_user_data(db: AsyncSession, data: AnswerRequest, is_correct: bool):
+async def get_user(db: AsyncSession, username: str) -> User:
+    result = await db.execute(select(User).where(User.name == username))
+    user = result.scalars().first()
+
+    if not user:
+        user = User(name=username, correct=0, incorrect=0, points=0)
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+    return user
+
+
+async def update_user_data(db: AsyncSession, data: AnswerRequest, is_correct: bool) -> User:
     result = await db.execute(select(User).where(User.name == data.name))
     user = result.scalars().first()
 

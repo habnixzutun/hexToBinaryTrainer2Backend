@@ -9,6 +9,9 @@ class AnswerRequest(BaseModel):
         return (f"Name: {self.name}, "
                 f"Bits: {self.bits}")
 
+class UserRequest(BaseModel):
+    name: str
+
 class UserType(BaseModel):
     name: str
     correct: int
