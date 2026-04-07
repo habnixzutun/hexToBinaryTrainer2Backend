@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import create_async_engine
 # Importiere Base und zwingend alle Modelle, damit SQLAlchemy sie für create_all registriert
 from src.database.engine import Base
 from src.models.user import User
-from src.models.ip_address import IpAddress
 
 load_dotenv()
 DB_NAME = os.getenv("DB_NAME")

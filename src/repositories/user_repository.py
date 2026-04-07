@@ -6,7 +6,7 @@ from src.pydantic_types import AnswerRequest
 
 
 async def get_users(db: AsyncSession):
-    result = await db.execute(select(User).order_by(User.points.desc()))
+    result = await db.execute(select(User).order_by(User.points.desc(), User.incorrect.asc()).limit(10))
     return result.scalars().all()
 
 async def update_user_data(db: AsyncSession, data: AnswerRequest, is_correct: bool):
