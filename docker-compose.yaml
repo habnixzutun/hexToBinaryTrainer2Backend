@@ -1,27 +1,32 @@
-# docker-compose.yml
 services:
   api:
     build: .
     ports:
       - "8000:8000"
     environment:
-      # Die URL nutzt den Service-Namen "db" aus Docker Compose
-      - DATABASE_URL=postgresql+asyncpg://postgres:DeinGeheimesPasswort@db:5432/hextobin
+      - DB_USER=${DB_USER}
+      - DB_PW=${DB_PW}
+      - DB_NAME=${DB_NAME}
+      - DB_HOST=db
+      - DATABASE_URL=postgresql+asyncpg://${DB_USER}:${DB_PW}@db:5432/${DB_NAME}
     depends_on:
       db:
-        condition: service_started
+        condition: service_healthy
 
   db:
     image: postgres:15-alpine
     restart: always
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=DeinGeheimesPasswort
-      - POSTGRES_DB=hextobin
-    ports:
-      - "5432:5432"
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PW}
+      - POSTGRES_DB=${DB_NAME}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:
