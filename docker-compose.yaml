@@ -1,6 +1,6 @@
 services:
   api:
-    restart: always
+    restart: unless-stopped
     build: .
     ports:
       - "8000:8000"
