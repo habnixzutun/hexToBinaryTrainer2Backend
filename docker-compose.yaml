@@ -9,6 +9,7 @@ services:
       - DB_NAME=${DB_NAME}
       - DB_HOST=db
       - DATABASE_URL=postgresql+asyncpg://${DB_USER}:${DB_PW}@db:5432/${DB_NAME}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
     depends_on:
       db:
         condition: service_healthy
