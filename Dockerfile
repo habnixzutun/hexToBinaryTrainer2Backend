@@ -6,11 +6,17 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
+# Build tools for packages that compile C/C++ extensions (e.g. greenlet)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
 # Kopiere die Dependency-Dateien
 COPY pyproject.toml uv.lock ./
 
 # Installiere Abhängigkeiten, ohne das Projekt selbst zu installieren
-RUN uv sync --no-dev --no-install-project
+RUN uv sync --no-dev --no-install-project --python 3.12
 
 # Kopiere den Quellcode
 COPY src ./src
