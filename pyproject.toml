@@ -60,3 +60,9 @@ pythonpath = ["."]
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
+
+[tool.coverage.run]
+omit = [
+    "src/init_db.py",  # Setup script, not testable
+    "*/tests/*",
+]
