@@ -4,7 +4,7 @@ from fastapi import Depends, FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.cors import CORSMiddleware
 
-from src.config import settings
+from src.config import get_settings
 from src.database.engine import Base, engine, get_db
 from src.pydantic_types import (
     AnswerRequest,
@@ -24,6 +24,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
