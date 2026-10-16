@@ -1,5 +1,5 @@
-# Dockerfile
-FROM python:3.12-slim
+# Dockerfile - Optimized version
+FROM python:3.12-slim as builder
 
 # Pin uv version for reproducible builds
 COPY --from=ghcr.io/astral-sh/uv:0.4.25 /uv /uvx /bin/
@@ -20,6 +20,20 @@ RUN uv sync --no-dev --no-install-project --python 3.12
 
 # Copy source code
 COPY src ./src
+
+# Final stage - minimal runtime image
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Copy uv from builder
+COPY --from=ghcr.io/astral-sh/uv:0.4.25 /uv /uvx /bin/
+
+# Copy only the virtual environment from builder
+COPY --from=builder /app/.venv /app/.venv
+
+# Copy source code
+COPY --from=builder /app/src /app/src
 
 # Create non-root user
 RUN adduser --disabled-password --gecos "" appuser && \
