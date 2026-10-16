@@ -19,6 +19,10 @@ FastAPI backend for a hex-to-binary training application with user tracking and 
 - **Validation**: Pydantic v2
 - **Testing**: pytest with pytest-asyncio, pytest-cov
 
+## Architecture
+
+For detailed architecture documentation, see [docs/architecture.md](docs/architecture.md).
+
 ## Setup
 
 ### Prerequisites
