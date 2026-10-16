@@ -5,7 +5,38 @@ on:
     branches: [main]
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.4.25"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --python 3.12
+
+      - name: Run linter
+        run: uv run ruff check src/
+
+      - name: Run tests with coverage
+        run: uv run pytest --cov=src --cov-report=term-missing --cov-fail-under=80
+        env:
+          DB_USER: test_user
+          DB_PW: test_password
+          DB_NAME: test_db
+          DB_HOST: localhost
+          DB_PORT: 5432
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
 
     steps:
