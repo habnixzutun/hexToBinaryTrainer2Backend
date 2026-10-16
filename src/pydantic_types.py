@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AnswerRequest(BaseModel):
@@ -13,6 +13,8 @@ class UserRequest(BaseModel):
     name: str
 
 class UserType(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     name: str
     correct: int
     incorrect: int
