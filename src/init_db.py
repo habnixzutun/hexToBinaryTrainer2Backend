@@ -6,9 +6,9 @@ import asyncpg
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine
 
-# Importiere Base und zwingend alle Modelle, damit SQLAlchemy sie für create_all registriert
+# Importiere Base und zwingend alle Modelle, damit SQLAlchemy sie für
+# create_all registriert
 from src.database.engine import Base
-from src.models.user import User
 
 load_dotenv()
 DB_NAME = os.getenv("DB_NAME")
@@ -26,7 +26,7 @@ async def wait_for_db():
             conn = await asyncpg.connect(ASYNC_PG_URL)
             await conn.close()
             break
-        except Exception:
+        except asyncpg.PostgresError:
             print("Warte auf DB...")
             await asyncio.sleep(2)
 
