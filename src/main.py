@@ -1,15 +1,20 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends
+
+from fastapi import Depends, FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.cors import CORSMiddleware
 
 from src.config import settings
-
-from src.models import User
-from src.database.engine import engine, Base, get_db
+from src.database.engine import Base, engine, get_db
+from src.pydantic_types import (
+    AnswerRequest,
+    ResultResponse,
+    UserList,
+    UserRequest,
+    UserType,
+)
 from src.repositories import user_repository
-import src.models
-from src.pydantic_types import AnswerRequest, UserList, ResultResponse, UserType, UserRequest
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

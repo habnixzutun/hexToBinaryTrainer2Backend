@@ -1,14 +1,18 @@
 # src/repositories/user_repository.py
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+
 from src.models.user import User
 from src.pydantic_types import AnswerRequest
 
 
 async def get_users(db: AsyncSession) -> list[User] | Sequence[Any]:
-    result = await db.execute(select(User).order_by(User.points.desc(), User.incorrect.asc()).limit(10))
+    result = await db.execute(
+        select(User).order_by(User.points.desc(), User.incorrect.asc()).limit(10)
+    )
     return result.scalars().all()
 
 async def get_user(db: AsyncSession, username: str) -> User:
@@ -24,7 +28,9 @@ async def get_user(db: AsyncSession, username: str) -> User:
     return user
 
 
-async def update_user_data(db: AsyncSession, data: AnswerRequest, is_correct: bool) -> User:
+async def update_user_data(
+    db: AsyncSession, data: AnswerRequest, is_correct: bool
+) -> User:
     result = await db.execute(select(User).where(User.name == data.name))
     user = result.scalars().first()
 

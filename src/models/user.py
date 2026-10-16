@@ -1,6 +1,6 @@
 # src/models/user.py
 from sqlalchemy import Column, Integer, String
-from sqlalchemy.orm import relationship
+
 from src.database.engine import Base
 
 
