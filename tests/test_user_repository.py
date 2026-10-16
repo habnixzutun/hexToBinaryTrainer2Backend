@@ -8,7 +8,6 @@ import pytest
 from sqlalchemy import select
 
 from src.models.user import User
-from src.pydantic_types import AnswerRequest
 from src.repositories.user_repository import get_user, get_users, update_user_data
 
 
@@ -153,8 +152,7 @@ class TestUpdateUserData:
         await session.commit()
 
         # Update with correct answer
-        data = AnswerRequest(name="test_user", bits=5)
-        updated_user = await update_user_data(session, data, is_correct=True)
+        updated_user = await update_user_data(session, "test_user", 5, is_correct=True)
 
         assert updated_user.correct == 1
         assert updated_user.incorrect == 0
@@ -169,8 +167,7 @@ class TestUpdateUserData:
         await session.commit()
 
         # Update with incorrect answer
-        data = AnswerRequest(name="test_user", bits=5)
-        updated_user = await update_user_data(session, data, is_correct=False)
+        updated_user = await update_user_data(session, "test_user", 5, is_correct=False)
 
         assert updated_user.correct == 0
         assert updated_user.incorrect == 1
@@ -184,8 +181,7 @@ class TestUpdateUserData:
         assert result.scalar_one_or_none() is None
 
         # Update with answer
-        data = AnswerRequest(name="new_user", bits=5)
-        updated_user = await update_user_data(session, data, is_correct=True)
+        updated_user = await update_user_data(session, "new_user", 5, is_correct=True)
 
         # User should be created
         assert updated_user.name == "new_user"
@@ -202,8 +198,7 @@ class TestUpdateUserData:
 
         # Update with 3 correct answers
         for i in range(3):
-            data = AnswerRequest(name="test_user", bits=5)
-            await update_user_data(session, data, is_correct=True)
+            await update_user_data(session, "test_user", 5, is_correct=True)
 
         # Verify final state
         result = await session.execute(select(User).where(User.name == "test_user"))
@@ -222,8 +217,7 @@ class TestUpdateUserData:
 
         # Update with 2 incorrect answers
         for i in range(2):
-            data = AnswerRequest(name="test_user", bits=5)
-            await update_user_data(session, data, is_correct=False)
+            await update_user_data(session, "test_user", 5, is_correct=False)
 
         # Verify final state
         result = await session.execute(select(User).where(User.name == "test_user"))
@@ -241,14 +235,11 @@ class TestUpdateUserData:
         await session.commit()
 
         # Update with mixed answers
-        data1 = AnswerRequest(name="test_user", bits=5)
-        await update_user_data(session, data1, is_correct=True)  # +5
+        await update_user_data(session, "test_user", 5, is_correct=True)  # +5
 
-        data2 = AnswerRequest(name="test_user", bits=3)
-        await update_user_data(session, data2, is_correct=False)  # -12
+        await update_user_data(session, "test_user", 3, is_correct=False)  # -12
 
-        data3 = AnswerRequest(name="test_user", bits=10)
-        await update_user_data(session, data3, is_correct=True)  # +10
+        await update_user_data(session, "test_user", 10, is_correct=True)  # +10
 
         # Verify final state
         result = await session.execute(select(User).where(User.name == "test_user"))

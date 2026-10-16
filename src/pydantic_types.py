@@ -1,9 +1,9 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class AnswerRequest(BaseModel):
     name: str
-    bits: int
+    bits: int = Field(gt=0)
 
     def __str__(self):
         return (f"Name: {self.name}, "

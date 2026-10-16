@@ -31,16 +31,16 @@ class TestAnswerRequest:
         assert request.bits == 5
 
     def test_answer_request_with_zero_bits(self):
-        """Verify AnswerRequest accepts zero bits (current behavior)."""
-        # Note: US-03 will add validation for bits > 0
-        request = AnswerRequest(name="test_user", bits=0)
-        assert request.bits == 0
+        """Verify AnswerRequest rejects zero bits (US-03 validation)."""
+        with pytest.raises(ValidationError) as exc_info:
+            AnswerRequest(name="test_user", bits=0)
+        assert "bits" in str(exc_info.value)
 
     def test_answer_request_with_negative_bits(self):
-        """Verify AnswerRequest accepts negative bits (current behavior)."""
-        # Note: US-03 will add validation for bits > 0
-        request = AnswerRequest(name="test_user", bits=-5)
-        assert request.bits == -5
+        """Verify AnswerRequest rejects negative bits (US-03 validation)."""
+        with pytest.raises(ValidationError) as exc_info:
+            AnswerRequest(name="test_user", bits=-5)
+        assert "bits" in str(exc_info.value)
 
     def test_answer_request_missing_name(self):
         """Verify AnswerRequest rejects missing name."""

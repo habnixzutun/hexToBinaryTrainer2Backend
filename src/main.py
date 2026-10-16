@@ -60,7 +60,7 @@ async def get_user(request: UserRequest, db: AsyncSession = Depends(get_db)):
 
 @app.post("/api/correct", response_model=ResultResponse)
 async def correct_answer(request: AnswerRequest, db: AsyncSession = Depends(get_db)):
-    user = await user_repository.update_user_data(db, request, is_correct=True)
+    user = await user_repository.update_user_data(db, request.name, request.bits, is_correct=True)
     return {"message": "Success", "user": UserType(
                                             name=user.name,
                                             correct=user.correct,
@@ -71,8 +71,7 @@ async def correct_answer(request: AnswerRequest, db: AsyncSession = Depends(get_
 
 @app.post("/api/incorrect", response_model=ResultResponse)
 async def incorrect_answer(request: AnswerRequest, db: AsyncSession = Depends(get_db)):
-    print(request)
-    user = await user_repository.update_user_data(db, request, is_correct=False)
+    user = await user_repository.update_user_data(db, request.name, request.bits, is_correct=False)
     return {"message": "Success", "user": UserType(
                                             name=user.name,
                                             correct=user.correct,

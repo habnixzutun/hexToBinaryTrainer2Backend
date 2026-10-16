@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
 from src.models.user import User
-from src.pydantic_types import AnswerRequest
 
 
 async def get_users(db: AsyncSession) -> list[User] | Sequence[Any]:
@@ -29,21 +28,21 @@ async def get_user(db: AsyncSession, username: str) -> User:
 
 
 async def update_user_data(
-    db: AsyncSession, data: AnswerRequest, is_correct: bool
+    db: AsyncSession, name: str, bits: int, is_correct: bool
 ) -> User:
-    result = await db.execute(select(User).where(User.name == data.name))
+    result = await db.execute(select(User).where(User.name == name))
     user = result.scalars().first()
 
     if not user:
-        user = User(name=data.name, correct=0, incorrect=0, points=0)
+        user = User(name=name, correct=0, incorrect=0, points=0)
         db.add(user)
 
     if is_correct:
         user.correct += 1
-        user.points += data.bits
+        user.points += bits
     else:
         user.incorrect += 1
-        user.points -= data.bits * 4
+        user.points -= bits * 4
 
     await db.commit()
     await db.refresh(user)
