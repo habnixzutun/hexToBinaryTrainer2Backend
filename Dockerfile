@@ -1,8 +1,8 @@
 # Dockerfile
 FROM python:3.12-slim
 
-# Lade uv direkt vom offiziellen Image
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Pin uv version for reproducible builds
+COPY --from=ghcr.io/astral-sh/uv:0.4.25 /uv /uvx /bin/
 
 WORKDIR /app
 
@@ -12,16 +12,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Kopiere die Dependency-Dateien
+# Copy dependency files
 COPY pyproject.toml uv.lock ./
 
-# Installiere Abhängigkeiten, ohne das Projekt selbst zu installieren
+# Install dependencies without installing the project itself
 RUN uv sync --no-dev --no-install-project --python 3.12
 
-# Kopiere den Quellcode
+# Copy source code
 COPY src ./src
+
+# Create non-root user
+RUN adduser --disabled-password --gecos "" appuser && \
+    chown -R appuser:appuser /app
+USER appuser
 
 EXPOSE 8000
 
-# Führe erst init_db aus, und wenn das erfolgreich war (&&), starte uvicorn
+# Run init_db first, then start uvicorn if successful
 CMD ["sh", "-c", "uv run python -m src.init_db && uv run uvicorn src.main:app --host 0.0.0.0 --port 8000"]
