@@ -152,6 +152,54 @@ class TestUserType:
         assert user.name == "test_user"
         assert user.correct == 10
 
+    @pytest.mark.asyncio
+    async def test_user_type_model_validate_from_sqlalchemy(self, session):
+        """Verify UserType.model_validate works with SQLAlchemy User objects (US-04)."""
+        from src.models.user import User
+
+        # Create a SQLAlchemy User object
+        user = User(name="test_user", correct=3, incorrect=1, points=17)
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        # Convert using model_validate
+        user_type = UserType.model_validate(user)
+
+        # Verify all fields match exactly
+        assert user_type.name == "test_user"
+        assert user_type.correct == 3
+        assert user_type.incorrect == 1
+        assert user_type.points == 17
+
+    @pytest.mark.asyncio
+    async def test_user_type_model_validate_regression(self, session):
+        """Regression test: verify UserType maps all fields correctly from User model (US-04)."""
+        from src.models.user import User
+
+        # Create user with specific values to catch field mapping errors
+        user = User(name="regression_user", correct=42, incorrect=7, points=1337)
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+
+        # Convert and verify exact field-by-field mapping
+        user_type = UserType.model_validate(user)
+
+        assert user_type.name == user.name
+        assert user_type.correct == user.correct
+        assert user_type.incorrect == user.incorrect
+        assert user_type.points == user.points
+
+        # Verify serialization produces expected dict
+        data = user_type.model_dump()
+        assert data == {
+            "name": "regression_user",
+            "correct": 42,
+            "incorrect": 7,
+            "points": 1337,
+        }
+
 
 # ============================================================================
 # UserList Tests

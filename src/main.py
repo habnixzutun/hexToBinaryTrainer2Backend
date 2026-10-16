@@ -51,31 +51,14 @@ async def get_leaderboard(db: AsyncSession = Depends(get_db)):
 @app.post("/api/user", response_model=UserType)
 async def get_user(request: UserRequest, db: AsyncSession = Depends(get_db)):
     user = await user_repository.get_user(db, request.name)
-    return UserType(
-            name=user.name,
-            correct=user.correct,
-            incorrect=user.incorrect,
-            points=user.points
-        )
+    return UserType.model_validate(user)
 
 @app.post("/api/correct", response_model=ResultResponse)
 async def correct_answer(request: AnswerRequest, db: AsyncSession = Depends(get_db)):
     user = await user_repository.update_user_data(db, request.name, request.bits, is_correct=True)
-    return {"message": "Success", "user": UserType(
-                                            name=user.name,
-                                            correct=user.correct,
-                                            incorrect=user.incorrect,
-                                            points=user.points
-                                        )
-            }
+    return {"message": "Success", "user": UserType.model_validate(user)}
 
 @app.post("/api/incorrect", response_model=ResultResponse)
 async def incorrect_answer(request: AnswerRequest, db: AsyncSession = Depends(get_db)):
     user = await user_repository.update_user_data(db, request.name, request.bits, is_correct=False)
-    return {"message": "Success", "user": UserType(
-                                            name=user.name,
-                                            correct=user.correct,
-                                            incorrect=user.incorrect,
-                                            points=user.points
-                                        )
-            }
+    return {"message": "Success", "user": UserType.model_validate(user)}
