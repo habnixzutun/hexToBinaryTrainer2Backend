@@ -1,26 +1,27 @@
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import FastAPI
+from sqlalchemy import text
 from starlette.middleware.cors import CORSMiddleware
 
 from src.config import get_settings
-from src.database.engine import Base, engine, get_db
-from src.pydantic_types import (
-    AnswerRequest,
-    ResultResponse,
-    UserList,
-    UserRequest,
-    UserType,
-)
-from src.repositories import user_repository
+from src.database.engine import AsyncSessionLocal
+from src.migrations.v001_auth_schema import create_migrations_table, run_migration
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Create migrations tracking table
+    async with AsyncSessionLocal() as session:
+        await create_migrations_table(session)
+        await session.commit()
+
+    # Run auth schema migration (only executes once)
+    async with AsyncSessionLocal() as session:
+        await run_migration(session)
+
     yield
+
 
 app = FastAPI(lifespan=lifespan)
 
@@ -34,32 +35,21 @@ app.add_middleware(
 )
 
 
-@app.get("/api/leaderboard", response_model=UserList)
-async def get_leaderboard(db: AsyncSession = Depends(get_db)):
-    users = await user_repository.get_users(db)
-    return {
-        "entries": [
-            {
-                "name": user.name,
-                "correct": user.correct,
-                "incorrect": user.incorrect,
-                "points": user.points
-            }
-            for user in users
-        ]
-    }
+@app.get("/healthz")
+async def health_check():
+    """Health check endpoint for Docker and monitoring.
 
-@app.post("/api/user", response_model=UserType)
-async def get_user(request: UserRequest, db: AsyncSession = Depends(get_db)):
-    user = await user_repository.get_user(db, request.name)
-    return UserType.model_validate(user)
+    Returns:
+        dict: Status information including database connectivity
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+        return {"status": "ok", "database": "connected"}
+    except Exception as e:
+        return {"status": "error", "database": "disconnected", "error": str(e)}
 
-@app.post("/api/correct", response_model=ResultResponse)
-async def correct_answer(request: AnswerRequest, db: AsyncSession = Depends(get_db)):
-    user = await user_repository.update_user_data(db, request.name, request.bits, is_correct=True)
-    return {"message": "Success", "user": UserType.model_validate(user)}
 
-@app.post("/api/incorrect", response_model=ResultResponse)
-async def incorrect_answer(request: AnswerRequest, db: AsyncSession = Depends(get_db)):
-    user = await user_repository.update_user_data(db, request.name, request.bits, is_correct=False)
-    return {"message": "Success", "user": UserType.model_validate(user)}
+# Note: Legacy endpoints (/api/leaderboard, /api/user, /api/correct, /api/incorrect)
+# have been removed as part of the authentication schema migration (US-09).
+# New authentication endpoints will be added in US-13, US-14, US-15, US-16, US-19.

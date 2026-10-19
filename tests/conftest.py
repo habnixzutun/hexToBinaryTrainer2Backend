@@ -6,31 +6,39 @@ US-05: Settings now uses factory pattern (get_settings()) instead of module-leve
 
 import os
 
-# Set test environment variables
-# These override the defaults in Settings class for test isolation
-os.environ.setdefault("DB_NAME", "test_db")
-os.environ.setdefault("DB_USER", "test_user")
-os.environ.setdefault("DB_PW", "test_password")
-os.environ.setdefault("DB_HOST", "localhost")
-os.environ.setdefault("DB_PORT", "5432")
+# Set test environment variables for PostgreSQL test database
+# Use TEST_DB_* env vars if set, otherwise default to test_db
+os.environ.setdefault("DB_NAME", os.getenv("TEST_DB_NAME", "test_db"))
+os.environ.setdefault("DB_USER", os.getenv("TEST_DB_USER", "test_user"))
+os.environ.setdefault("DB_PW", os.getenv("TEST_DB_PASSWORD", "test_password"))
+os.environ.setdefault("DB_HOST", os.getenv("TEST_DB_HOST", "localhost"))
+os.environ.setdefault("DB_PORT", os.getenv("TEST_DB_PORT", "5434"))
 
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
 from src.database.engine import Base
-from src.models import User  # noqa: F401 - ensure model is imported
+from src.models import (  # noqa: F401 - ensure models are imported
+    User,
+    UserIdentity,
+    UserRefreshToken,
+    PasswordResetToken,
+    UserAuditLog,
+)
+from src.config import get_settings
 
 
 @pytest.fixture(scope="session")
 def test_db_config():
     """Test database configuration."""
+    settings = get_settings()
     return {
-        "db_name": "test_db",
-        "db_user": "test_user",
-        "db_pw": "test_password",
-        "db_host": "localhost",
-        "db_port": 5432,
+        "db_name": settings.db_name,
+        "db_user": settings.db_user,
+        "db_pw": settings.db_pw,
+        "db_host": settings.db_host,
+        "db_port": settings.db_port,
     }
 
 
@@ -42,16 +50,17 @@ def anyio_backend():
 
 @pytest.fixture
 async def async_engine():
-    """Create async engine with in-memory SQLite for testing.
+    """Create async engine with PostgreSQL for testing.
 
     Each test gets a fresh engine with all tables created.
-    Uses SQLite instead of PostgreSQL because:
-    - No external dependencies (no Docker/PostgreSQL needed)
-    - Fast (in-memory, no I/O)
-    - Isolated per test
-    - Sufficient for testing business logic (not asyncpg-specific features)
+    Uses PostgreSQL (not SQLite) to match production environment and ensure
+    PostgreSQL-specific features work correctly (CASCADE, constraints, etc.).
+
+    Requires PostgreSQL test database running on localhost:5433.
+    Start with: docker-compose -f docker-compose.test.yaml up -d
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    settings = get_settings()
+    engine = create_async_engine(settings.async_database_url, echo=False)
 
     # Create all tables
     async with engine.begin() as conn:
