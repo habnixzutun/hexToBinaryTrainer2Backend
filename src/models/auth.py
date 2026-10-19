@@ -10,8 +10,6 @@ SQLAlchemy models for the new authentication system supporting:
 All tables use UUID7 as primary keys for time-ordering and performance.
 """
 
-from datetime import datetime
-
 from sqlalchemy import (
     Column,
     DateTime,
@@ -19,6 +17,7 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import relationship
 from uuid_utils import uuid7
@@ -38,7 +37,9 @@ class User(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid7()))
     username = Column(String(50), nullable=False, index=True, unique=True)
     email = Column(String(255), nullable=False, index=True, unique=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP")
+    )
     last_username_change_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
@@ -81,7 +82,9 @@ class UserIdentity(Base):
     provider_user_id = Column(String(255), nullable=False)
     password_hash = Column(String(255), nullable=True)
     verified_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP")
+    )
 
     # Relationships
     user = relationship("User", back_populates="identities")
@@ -107,10 +110,12 @@ class UserRefreshToken(Base):
         nullable=False,
         index=True,
     )
-    token_hash = Column(String(255), nullable=False, index=True)
+    token_hash = Column(String(255), nullable=False, index=True, unique=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP")
+    )
 
     # Relationships
     user = relationship("User", back_populates="refresh_tokens")
@@ -135,11 +140,13 @@ class PasswordResetToken(Base):
         nullable=False,
         index=True,
     )
-    token_hash = Column(String(255), nullable=False, index=True)
+    token_hash = Column(String(255), nullable=False, index=True, unique=True)
     expires_at = Column(DateTime(timezone=True), nullable=False)
     used_at = Column(DateTime(timezone=True), nullable=True)
     type = Column(String(50), nullable=False)
-    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at = Column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP")
+    )
 
     # Relationships
     user = relationship("User", back_populates="password_reset_tokens")
@@ -162,7 +169,11 @@ class UserAuditLog(Base):
         index=True,
     )
     action = Column(String(50), nullable=False)
-    timestamp = Column(DateTime(timezone=True), default=datetime.utcnow, index=True)
+    timestamp = Column(
+        DateTime(timezone=True),
+        server_default=text("CURRENT_TIMESTAMP"),
+        index=True,
+    )
     ip_address = Column(String(45), nullable=True)
     user_agent = Column(Text, nullable=True)
     metadata_json = Column(Text, nullable=True)  # JSON string

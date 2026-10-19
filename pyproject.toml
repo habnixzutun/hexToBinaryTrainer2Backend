@@ -69,8 +69,4 @@ filterwarnings = [
 omit = [
     "src/init_db.py",  # Setup script, not testable
     "*/tests/*",
-    "src/models/user.py",  # Legacy model, replaced by auth.py
-    "src/repositories/user_repository.py",  # Legacy repository, will be replaced
-    "src/pydantic_types.py",  # Legacy schemas, will be replaced
-    "src/main.py",  # Endpoints will be updated in later US
 ]
