@@ -42,5 +42,5 @@ USER appuser
 
 EXPOSE 8000
 
-# Run init_db first, then start uvicorn if successful
-CMD ["sh", "-c", "uv run python -m src.init_db && uv run uvicorn src.main:app --host 0.0.0.0 --port 8000"]
+# Start uvicorn (database migrations run automatically via lifespan on startup)
+CMD ["uv", "run", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -11,6 +11,13 @@ services:
       - DB_HOST=db
       - DATABASE_URL=postgresql+asyncpg://${DB_USER}:${DB_PW}@db:5432/${DB_NAME}
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      - JWT_SECRET=${JWT_SECRET}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL}
+      - COOKIE_SECURE=${COOKIE_SECURE:-true}
     depends_on:
       db:
         condition: service_healthy
