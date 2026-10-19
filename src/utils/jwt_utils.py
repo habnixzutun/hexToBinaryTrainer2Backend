@@ -4,6 +4,7 @@ import os
 from datetime import UTC, datetime, timedelta
 
 import jwt
+from uuid_utils import uuid7
 
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-in-production")
 JWT_ALGORITHM = "HS256"
@@ -28,6 +29,7 @@ def create_refresh_token(user_id: str) -> str:
     payload = {
         "sub": user_id,
         "type": "refresh",
+        "jti": str(uuid7()),
         "exp": datetime.now(UTC) + timedelta(days=REFRESH_TOKEN_TTL_DAYS),
         "iat": datetime.now(UTC),
     }
