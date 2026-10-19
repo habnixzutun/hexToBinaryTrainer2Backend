@@ -1,13 +1,12 @@
-# src/models/user.py
-from sqlalchemy import Column, Integer, String
+"""Legacy User model - DEPRECATED.
 
-from src.database.engine import Base
+This file is kept for backward compatibility during migration.
+The new User model is in src/models/auth.py.
 
+All new code should use the User model from src/models/auth.py.
+"""
 
-class User(Base):
-    __tablename__ = "users"
+# Re-export from auth module for backward compatibility
+from src.models.auth import User
 
-    name = Column(String, primary_key=True, index=True)
-    correct = Column(Integer, default=0)
-    incorrect = Column(Integer, default=0)
-    points = Column(Integer, default=0)
+__all__ = ["User"]

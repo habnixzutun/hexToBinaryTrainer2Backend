@@ -5,7 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.cors import CORSMiddleware
 
 from src.config import get_settings
-from src.database.engine import Base, engine, get_db
+from src.database.engine import AsyncSessionLocal, get_db
+from src.migrations.v001_auth_schema import run_migration
 from src.pydantic_types import (
     AnswerRequest,
     ResultResponse,
@@ -18,8 +19,9 @@ from src.repositories import user_repository
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Run auth schema migration
+    async with AsyncSessionLocal() as session:
+        await run_migration(session)
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -56,10 +58,14 @@ async def get_user(request: UserRequest, db: AsyncSession = Depends(get_db)):
 
 @app.post("/api/correct", response_model=ResultResponse)
 async def correct_answer(request: AnswerRequest, db: AsyncSession = Depends(get_db)):
-    user = await user_repository.update_user_data(db, request.name, request.bits, is_correct=True)
+    user = await user_repository.update_user_data(
+        db, request.name, request.bits, is_correct=True
+    )
     return {"message": "Success", "user": UserType.model_validate(user)}
 
 @app.post("/api/incorrect", response_model=ResultResponse)
 async def incorrect_answer(request: AnswerRequest, db: AsyncSession = Depends(get_db)):
-    user = await user_repository.update_user_data(db, request.name, request.bits, is_correct=False)
+    user = await user_repository.update_user_data(
+        db, request.name, request.bits, is_correct=False
+    )
     return {"message": "Success", "user": UserType.model_validate(user)}
