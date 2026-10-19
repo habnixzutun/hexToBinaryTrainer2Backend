@@ -41,11 +41,11 @@ class TestGetSettings:
 
     def test_settings_has_default_values(self):
         """Verify Settings class has sensible defaults."""
-        # In test environment, conftest.py sets DB_NAME=test_db
+        # In test environment, conftest.py sets DB_NAME=test_db and DB_PORT=5434
         # This test verifies the Settings class structure and defaults work
         settings = Settings()
         assert settings.db_host == "localhost"  # Default or from conftest
-        assert settings.db_port == 5432  # Default
+        assert settings.db_port == 5434  # From conftest (test isolation)
         assert settings.db_name == "test_db"  # From conftest (test isolation)
 
     def test_get_settings_async_url_construction(self):
