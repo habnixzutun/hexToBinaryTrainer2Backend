@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.engine import get_db
-from src.models.auth import User
+from src.models.auth import User, UserIdentity
 from src.services.audit_service import log_audit_action, send_security_notification
 from src.services.email_service import EmailService, MockEmailService
 from src.services.user_service import change_password
@@ -146,6 +146,18 @@ async def verify_email_change(
     old_email = user.email
     user.email = new_email
     session.add(user)
+
+    # Also update the email provider identity so login works with the new email
+    identity_result = await session.execute(
+        select(UserIdentity).where(
+            UserIdentity.user_id == user_id,
+            UserIdentity.provider == "email",
+        )
+    )
+    identity = identity_result.scalar_one_or_none()
+    if identity is not None:
+        identity.provider_user_id = new_email
+        session.add(identity)
 
     await log_audit_action(
         session=session,
