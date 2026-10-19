@@ -4,7 +4,7 @@ import hashlib
 from datetime import UTC, datetime, timedelta
 
 import jwt
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid_utils import uuid7
 
@@ -71,9 +71,9 @@ async def reset_password(
     try:
         payload = decode_token(raw_token)
     except jwt.ExpiredSignatureError:
-        raise ValueError("expired")
+        raise ValueError("expired") from None
     except jwt.InvalidTokenError:
-        raise ValueError("invalid")
+        raise ValueError("invalid") from None
 
     if payload.get("type") != "password_reset":
         raise ValueError("invalid")

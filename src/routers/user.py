@@ -1,4 +1,4 @@
-"""User router: email change, email change verification, username change (US-16) and password change (US-19)."""
+"""User router: email/username/password change endpoints (US-16, US-19)."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -36,19 +36,19 @@ def _extract_bearer_user_id(request: Request) -> str:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing or invalid Authorization header.",
         )
-    token = auth[len("Bearer "):]
+    token = auth[len("Bearer ") :]
     try:
         payload = decode_token(token)
     except jwt.ExpiredSignatureError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired.",
-        )
+        ) from None
     except jwt.InvalidTokenError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token.",
-        )
+        ) from None
     if payload.get("type") != "access":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -119,12 +119,12 @@ async def verify_email_change(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Token has expired.",
-        )
+        ) from None
     except jwt.InvalidTokenError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid token.",
-        )
+        ) from None
 
     if payload.get("type") != "email_change":
         raise HTTPException(
@@ -257,26 +257,26 @@ async def change_password_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Old password is incorrect.",
-            )
+            ) from None
         if error == "weak_password":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="New password does not meet strength requirements.",
-            )
+            ) from None
         if error == "same_password":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="New password must be different from old password.",
-            )
+            ) from None
         if error == "identity_not_found":
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="User identity not found.",
-            )
+            ) from None
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password change failed.",
-        )
+        ) from None
 
     await log_audit_action(
         session=session,
@@ -289,4 +289,6 @@ async def change_password_endpoint(
 
     await send_security_notification(user_id, "password_change")
 
-    return {"message": "Password changed successfully. All sessions have been invalidated."}
+    return {
+        "message": "Password changed successfully. All sessions have been invalidated."
+    }

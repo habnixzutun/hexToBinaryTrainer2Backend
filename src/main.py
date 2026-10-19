@@ -16,7 +16,10 @@ from src.routers.user import router as user_router
 
 
 class CacheRequestBodyMiddleware(BaseHTTPMiddleware):
-    """Cache request body bytes on request.state so rate-limit key functions can read it."""
+    """Cache request body bytes on request.state.
+
+    Rate-limit key functions can read the body from state._body.
+    """
 
     async def dispatch(self, request: Request, call_next):
         body = await request.body()

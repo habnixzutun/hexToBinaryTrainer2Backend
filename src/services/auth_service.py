@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid_utils import uuid7
 
-from src.models.auth import User, UserIdentity, UserRefreshToken
+from src.models.auth import UserIdentity, UserRefreshToken
 from src.utils.jwt_utils import (
     REFRESH_TOKEN_TTL_DAYS,
     create_access_token,
@@ -76,7 +76,7 @@ async def refresh(
     try:
         payload = decode_token(refresh_token)
     except Exception:
-        raise ValueError("unauthorized")
+        raise ValueError("unauthorized") from None
 
     if payload.get("type") != "refresh":
         raise ValueError("unauthorized")

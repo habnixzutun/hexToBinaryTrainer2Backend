@@ -8,8 +8,12 @@ from typing import Protocol
 class EmailService(Protocol):
     async def send_verification_email(self, to_email: str, token: str) -> None: ...
     async def send_password_reset_email(self, to_email: str, token: str) -> None: ...
-    async def send_email_change_verification(self, to_email: str, token: str) -> None: ...
-    async def send_security_notification_email(self, to_email: str, action: str) -> None: ...
+    async def send_email_change_verification(
+        self, to_email: str, token: str
+    ) -> None: ...
+    async def send_security_notification_email(
+        self, to_email: str, action: str
+    ) -> None: ...
 
 
 class MockEmailService:
@@ -25,10 +29,16 @@ class MockEmailService:
         self.sent.append({"to": to_email, "token": token, "type": "password_reset"})
 
     async def send_email_change_verification(self, to_email: str, token: str) -> None:
-        self.sent.append({"to": to_email, "token": token, "type": "email_change_verification"})
+        self.sent.append(
+            {"to": to_email, "token": token, "type": "email_change_verification"}
+        )
 
-    async def send_security_notification_email(self, to_email: str, action: str) -> None:
-        self.sent.append({"to": to_email, "action": action, "type": "security_notification"})
+    async def send_security_notification_email(
+        self, to_email: str, action: str
+    ) -> None:
+        self.sent.append(
+            {"to": to_email, "action": action, "type": "security_notification"}
+        )
 
 
 class SMTPEmailService:
@@ -89,7 +99,9 @@ class SMTPEmailService:
             smtp.login(self._username, self._password)
             smtp.sendmail(self._from, to_email, msg.as_string())
 
-    async def send_security_notification_email(self, to_email: str, action: str) -> None:
+    async def send_security_notification_email(
+        self, to_email: str, action: str
+    ) -> None:
         body = f"A security-relevant action was performed on your account: {action}"
         msg = MIMEText(body)
         msg["Subject"] = "Security notification"

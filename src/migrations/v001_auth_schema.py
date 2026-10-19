@@ -27,9 +27,7 @@ async def migration_already_applied(session: AsyncSession) -> bool:
     """
     try:
         result = await session.execute(
-            text(
-                "SELECT 1 FROM schema_migrations WHERE version = 'v001_auth_schema'"
-            )
+            text("SELECT 1 FROM schema_migrations WHERE version = 'v001_auth_schema'")
         )
         return result.scalar() is not None
     except Exception:
@@ -60,12 +58,14 @@ async def create_migrations_table(session: AsyncSession) -> None:
     Args:
         session: AsyncSession for database operations
     """
-    await session.execute(text("""
+    await session.execute(
+        text("""
         CREATE TABLE IF NOT EXISTS schema_migrations (
             version TEXT PRIMARY KEY,
             applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         )
-    """))
+    """)
+    )
 
 
 async def run_migration(session: AsyncSession) -> None:
@@ -92,7 +92,8 @@ async def run_migration(session: AsyncSession) -> None:
     await session.execute(text("DROP TABLE IF EXISTS users CASCADE"))
 
     # Create new users table with UNIQUE constraints
-    await session.execute(text("""
+    await session.execute(
+        text("""
         CREATE TABLE users (
             id TEXT PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
@@ -100,10 +101,12 @@ async def run_migration(session: AsyncSession) -> None:
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             last_username_change_at TIMESTAMP WITH TIME ZONE
         )
-    """))
+    """)
+    )
 
     # Create user_identities table with UNIQUE constraint on provider+provider_user_id
-    await session.execute(text("""
+    await session.execute(
+        text("""
         CREATE TABLE user_identities (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -115,10 +118,12 @@ async def run_migration(session: AsyncSession) -> None:
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             UNIQUE(provider, provider_user_id)
         )
-    """))
+    """)
+    )
 
     # Create user_refresh_tokens table
-    await session.execute(text("""
+    await session.execute(
+        text("""
         CREATE TABLE user_refresh_tokens (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -128,10 +133,12 @@ async def run_migration(session: AsyncSession) -> None:
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
-    """))
+    """)
+    )
 
     # Create password_reset_tokens table
-    await session.execute(text("""
+    await session.execute(
+        text("""
         CREATE TABLE password_reset_tokens (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -142,13 +149,15 @@ async def run_migration(session: AsyncSession) -> None:
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
-    """))
+    """)
+    )
 
     # Create user_audit_log table
     # Note: user_id is NOT NULL for MVP; future enhancement could make it nullable
     # to log failed login attempts. ON DELETE CASCADE chosen for MVP simplicity;
     # future enhancement could use RESTRICT for audit trail preservation.
-    await session.execute(text("""
+    await session.execute(
+        text("""
         CREATE TABLE user_audit_log (
             id TEXT PRIMARY KEY,
             user_id TEXT NOT NULL,
@@ -159,7 +168,8 @@ async def run_migration(session: AsyncSession) -> None:
             metadata_json TEXT,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         )
-    """))
+    """)
+    )
 
     # Create indexes for performance
     await session.execute(
@@ -168,22 +178,30 @@ async def run_migration(session: AsyncSession) -> None:
     await session.execute(
         text("CREATE INDEX IF NOT EXISTS ix_users_email ON users(email)")
     )
-    await session.execute(text(
-        "CREATE INDEX IF NOT EXISTS ix_user_identities_provider "
-        "ON user_identities(provider, provider_user_id)"
-    ))
-    await session.execute(text(
-        "CREATE INDEX IF NOT EXISTS ix_user_refresh_tokens_token_hash "
-        "ON user_refresh_tokens(token_hash)"
-    ))
-    await session.execute(text(
-        "CREATE INDEX IF NOT EXISTS ix_password_reset_tokens_token_hash "
-        "ON password_reset_tokens(token_hash)"
-    ))
-    await session.execute(text(
-        "CREATE INDEX IF NOT EXISTS ix_user_audit_log_user_timestamp "
-        "ON user_audit_log(user_id, timestamp)"
-    ))
+    await session.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_user_identities_provider "
+            "ON user_identities(provider, provider_user_id)"
+        )
+    )
+    await session.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_user_refresh_tokens_token_hash "
+            "ON user_refresh_tokens(token_hash)"
+        )
+    )
+    await session.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_password_reset_tokens_token_hash "
+            "ON password_reset_tokens(token_hash)"
+        )
+    )
+    await session.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_user_audit_log_user_timestamp "
+            "ON user_audit_log(user_id, timestamp)"
+        )
+    )
 
     # Mark migration as applied
     await mark_migration_applied(session)

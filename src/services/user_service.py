@@ -6,7 +6,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.auth import UserIdentity, UserRefreshToken
-from src.utils.password import hash_password, validate_password_strength, verify_password
+from src.utils.password import (
+    hash_password,
+    validate_password_strength,
+    verify_password,
+)
 
 
 async def change_password(

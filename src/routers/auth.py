@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy import select
@@ -15,11 +15,14 @@ from uuid_utils import uuid7
 from src.config import get_settings
 from src.database.engine import get_db
 from src.models.auth import User, UserIdentity
-from src.models.auth_schemas import RegisterRequest, RegisterResponse, VerifyEmailRequest
-from src.services import auth_service
+from src.models.auth_schemas import (
+    RegisterRequest,
+    RegisterResponse,
+    VerifyEmailRequest,
+)
+from src.services import auth_service, password_reset_service
 from src.services.audit_service import log_audit_action
 from src.services.email_service import EmailService, MockEmailService
-from src.services import password_reset_service
 from src.utils.jwt_utils import create_verification_token, decode_token
 from src.utils.password import hash_password, validate_password_strength
 
@@ -123,8 +126,12 @@ async def login(
         )
     except ValueError as exc:
         if str(exc) == "unverified":
-            raise HTTPException(status_code=403, detail="Account not verified.")
-        raise HTTPException(status_code=401, detail="Invalid credentials.")
+            raise HTTPException(
+                status_code=403, detail="Account not verified."
+            ) from None
+        raise HTTPException(
+            status_code=401, detail="Invalid credentials."
+        ) from None
 
     _set_refresh_cookie(response, refresh_token)
     return LoginResponse(access_token=access_token)
@@ -142,7 +149,9 @@ async def refresh(
     try:
         access_token = await auth_service.refresh(session, refresh_token)
     except ValueError:
-        raise HTTPException(status_code=401, detail="Invalid or expired refresh token.")
+        raise HTTPException(
+            status_code=401, detail="Invalid or expired refresh token."
+        ) from None
 
     return RefreshResponse(access_token=access_token)
 
@@ -161,7 +170,9 @@ async def logout(
     return {"message": "Logged out."}
 
 
-@router.post("/register", status_code=status.HTTP_201_CREATED, response_model=RegisterResponse)
+@router.post(
+    "/register", status_code=status.HTTP_201_CREATED, response_model=RegisterResponse
+)
 async def register(
     request: Request,
     body: RegisterRequest,
@@ -178,9 +189,7 @@ async def register(
             detail={"errors": strength_errors},
         )
 
-    existing_email = await session.execute(
-        select(User).where(User.email == body.email)
-    )
+    existing_email = await session.execute(select(User).where(User.email == body.email))
     if existing_email.scalar_one_or_none() is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -240,12 +249,12 @@ async def verify_email(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Verification token has expired.",
-        )
+        ) from None
     except jwt.InvalidTokenError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid verification token.",
-        )
+        ) from None
 
     if payload.get("type") != "email_verification":
         raise HTTPException(
@@ -332,15 +341,15 @@ async def reset_password(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Reset token has expired.",
-            )
+            ) from None
         if reason == "already_used":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Reset token has already been used.",
-            )
+            ) from None
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid reset token.",
-        )
+        ) from None
 
     return {"message": "Password reset successful."}
