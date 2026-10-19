@@ -19,6 +19,7 @@ from src.models.auth_schemas import RegisterRequest, RegisterResponse, VerifyEma
 from src.services import auth_service
 from src.services.audit_service import log_audit_action
 from src.services.email_service import EmailService, MockEmailService
+from src.services import password_reset_service
 from src.utils.jwt_utils import create_verification_token, decode_token
 from src.utils.password import hash_password, validate_password_strength
 
@@ -282,3 +283,64 @@ async def verify_email(
     await session.commit()
 
     return {"message": "Email verified successfully."}
+
+
+class RequestPasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+@router.post("/request-password-reset", status_code=status.HTTP_200_OK)
+async def request_password_reset(
+    body: RequestPasswordResetRequest,
+    session: AsyncSession = Depends(get_db),
+    email_service: EmailService = Depends(get_email_service),
+) -> dict:
+    await password_reset_service.request_password_reset(
+        session=session,
+        email=body.email,
+        email_service=email_service,
+    )
+    return {"message": "If this email is registered, a reset link has been sent."}
+
+
+@router.post("/reset-password", status_code=status.HTTP_200_OK)
+async def reset_password(
+    body: ResetPasswordRequest,
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    strength_errors = validate_password_strength(body.new_password)
+    if strength_errors:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"errors": strength_errors},
+        )
+
+    try:
+        await password_reset_service.reset_password(
+            session=session,
+            raw_token=body.token,
+            new_password=body.new_password,
+        )
+    except ValueError as exc:
+        reason = str(exc)
+        if reason == "expired":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Reset token has expired.",
+            )
+        if reason == "already_used":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Reset token has already been used.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid reset token.",
+        )
+
+    return {"message": "Password reset successful."}
