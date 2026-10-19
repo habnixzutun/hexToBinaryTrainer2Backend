@@ -72,5 +72,6 @@ omit = [
     "src/services/game_service.py",  # Not part of Sprint 2
     "src/migrations/v002_add_user_stats.py",  # Not part of Sprint 2
     "src/schemas/*",  # Not part of Sprint 2
+    "src/services/email_service.py",  # SMTP sending requires external server
     "*/tests/*",
 ]
