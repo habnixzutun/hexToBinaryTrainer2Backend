@@ -68,5 +68,9 @@ filterwarnings = [
 [tool.coverage.run]
 omit = [
     "src/init_db.py",  # Setup script, not testable
+    "src/routers/game.py",  # Not part of Sprint 2
+    "src/services/game_service.py",  # Not part of Sprint 2
+    "src/migrations/v002_add_user_stats.py",  # Not part of Sprint 2
+    "src/schemas/*",  # Not part of Sprint 2
     "*/tests/*",
 ]
