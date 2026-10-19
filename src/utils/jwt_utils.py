@@ -10,6 +10,8 @@ JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_TTL_MINUTES = 15
 REFRESH_TOKEN_TTL_DAYS = 7
 VERIFICATION_TOKEN_TTL_HOURS = 24
+PASSWORD_RESET_TOKEN_TTL_HOURS = 1
+EMAIL_CHANGE_TOKEN_TTL_HOURS = 24
 
 
 def create_access_token(user_id: str) -> str:
@@ -37,6 +39,27 @@ def create_verification_token(user_id: str) -> str:
         "sub": user_id,
         "type": "email_verification",
         "exp": datetime.now(UTC) + timedelta(hours=VERIFICATION_TOKEN_TTL_HOURS),
+        "iat": datetime.now(UTC),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def create_password_reset_token(user_id: str) -> str:
+    payload = {
+        "sub": user_id,
+        "type": "password_reset",
+        "exp": datetime.now(UTC) + timedelta(hours=PASSWORD_RESET_TOKEN_TTL_HOURS),
+        "iat": datetime.now(UTC),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def create_email_change_token(user_id: str, new_email: str) -> str:
+    payload = {
+        "sub": user_id,
+        "type": "email_change",
+        "new_email": new_email,
+        "exp": datetime.now(UTC) + timedelta(hours=EMAIL_CHANGE_TOKEN_TTL_HOURS),
         "iat": datetime.now(UTC),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
