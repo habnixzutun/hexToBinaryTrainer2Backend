@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import jwt
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-in-production-x")
+JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-in-production")
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_TTL_MINUTES = 15
 REFRESH_TOKEN_TTL_DAYS = 7
