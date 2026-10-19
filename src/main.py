@@ -12,6 +12,7 @@ from src.config import get_settings
 from src.database.engine import AsyncSessionLocal
 from src.migrations.v001_auth_schema import create_migrations_table, run_migration
 from src.routers.auth import router as auth_router
+from src.routers.user import router as user_router
 
 
 class CacheRequestBodyMiddleware(BaseHTTPMiddleware):
@@ -52,6 +53,7 @@ app.add_middleware(
 app.add_middleware(CacheRequestBodyMiddleware)
 
 app.include_router(auth_router)
+app.include_router(user_router)
 
 
 @app.get("/healthz")
