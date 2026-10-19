@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     db_port: int = 5432
     db_user: str = ""
     allowed_origins: list[str] = ["http://localhost:5173"]
+    cookie_secure: bool = True
 
     @property
     def async_database_url(self) -> str:

@@ -8,7 +8,9 @@ import os
 
 # Set test environment variables for PostgreSQL test database
 # Use TEST_DB_* env vars if set, otherwise default to test_db
+os.environ.setdefault("COOKIE_SECURE", "false")
 os.environ.setdefault("DB_NAME", os.getenv("TEST_DB_NAME", "test_db"))
+
 os.environ.setdefault("DB_USER", os.getenv("TEST_DB_USER", "test_user"))
 os.environ.setdefault("DB_PW", os.getenv("TEST_DB_PASSWORD", "test_password"))
 os.environ.setdefault("DB_HOST", os.getenv("TEST_DB_HOST", "localhost"))
@@ -27,6 +29,8 @@ from src.models import (  # noqa: F401 - ensure models are imported
     UserAuditLog,
 )
 from src.config import get_settings
+
+get_settings.cache_clear()
 
 
 @pytest.fixture(scope="session")
