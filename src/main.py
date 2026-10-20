@@ -12,12 +12,13 @@ from starlette.middleware.cors import CORSMiddleware
 
 from src.config import get_settings
 from src.database.engine import AsyncSessionLocal
-from src.migrations.v001_auth_schema import create_migrations_table, run_migration as run_v001
+from src.migrations.v001_auth_schema import create_migrations_table
+from src.migrations.v001_auth_schema import run_migration as run_v001
 from src.migrations.v002_game_stats import run_migration as run_v002
 from src.models.auth import UserIdentity
 from src.routers.auth import router as auth_router
-from src.routers.user import router as user_router
 from src.routers.game import router as game_router
+from src.routers.user import router as user_router
 from src.services.audit_service import log_audit_action
 from src.services.email_wiring import install_email_service
 from src.utils.jwt_utils import decode_token
@@ -82,6 +83,9 @@ async def health_check():
         return {"status": "error", "database": "disconnected", "error": str(e)}
 
 
+_PAGE_STYLE = "font-family: sans-serif; text-align: center; padding: 50px;"
+
+
 @app.get("/verify-email")
 async def verify_email_link(token: str) -> Response:
     """Handle email verification link from email client.
@@ -96,7 +100,7 @@ async def verify_email_link(token: str) -> Response:
         <!DOCTYPE html>
         <html>
         <head><title>Email Verification</title></head>
-        <body style="font-family: sans-serif; text-align: center; padding: 50px;">
+        <body style="{_PAGE_STYLE}">
             <h1>❌ Verification Failed</h1>
             <p>{message}</p>
             <p><a href="{frontend_url}">Go to login page</a></p>
@@ -107,12 +111,21 @@ async def verify_email_link(token: str) -> Response:
     try:
         payload = decode_token(token)
     except jwt.ExpiredSignatureError:
-        return Response(content=error_html("Verification token has expired."), media_type="text/html")
+        return Response(
+            content=error_html("Verification token has expired."),
+            media_type="text/html",
+        )
     except jwt.InvalidTokenError:
-        return Response(content=error_html("Invalid verification token."), media_type="text/html")
+        return Response(
+            content=error_html("Invalid verification token."),
+            media_type="text/html",
+        )
 
     if payload.get("type") != "email_verification":
-        return Response(content=error_html("Invalid token type."), media_type="text/html")
+        return Response(
+            content=error_html("Invalid token type."),
+            media_type="text/html",
+        )
 
     user_id: str = payload["sub"]
 
@@ -125,7 +138,10 @@ async def verify_email_link(token: str) -> Response:
         )
         identity = identity_result.scalar_one_or_none()
         if identity is None:
-            return Response(content=error_html("User identity not found."), media_type="text/html")
+            return Response(
+                content=error_html("User identity not found."),
+                media_type="text/html",
+            )
 
         if identity.verified_at is not None:
             return Response(
@@ -133,7 +149,7 @@ async def verify_email_link(token: str) -> Response:
                 <!DOCTYPE html>
                 <html>
                 <head><title>Email Verification</title></head>
-                <body style="font-family: sans-serif; text-align: center; padding: 50px;">
+                <body style="{_PAGE_STYLE}">
                     <h1>✓ Email Already Verified</h1>
                     <p>Your email is already verified. You can log in now.</p>
                     <p><a href="{frontend_url}">Go to login page</a></p>
@@ -162,7 +178,7 @@ async def verify_email_link(token: str) -> Response:
             <title>Email Verification</title>
             <meta http-equiv="refresh" content="3;url={frontend_url}">
         </head>
-        <body style="font-family: sans-serif; text-align: center; padding: 50px;">
+        <body style="{_PAGE_STYLE}">
             <h1>✓ Email Verified Successfully!</h1>
             <p>Your email has been verified. You can now log in.</p>
             <p>Redirecting to login page...</p>
