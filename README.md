@@ -466,6 +466,21 @@ Email notifications sent for:
 
 ## Testing
 
+### Prerequisites
+
+DB-backed tests (migrations, repositories, endpoint tests) run against a
+dedicated PostgreSQL test instance — not the development database on port
+5432. Start it before running the suite:
+
+```bash
+docker compose -f docker-compose.test.yaml up -d
+```
+
+Defaults are `test_user`/`test_password` @ `localhost:5434`, database
+`test_db` (identical credentials to the CI Postgres service). Local
+overrides belong in a gitignored `.env.test` file (see
+`.env.test.example`). Details: `docs/test-setup.md`.
+
 ### Run Tests
 
 ```bash
@@ -491,6 +506,7 @@ uv run pytest -v
 - `tests/test_user_password_change.py`: Password change while logged in (US-19)
 - `tests/test_integration_auth.py`: End-to-end auth flows (US-17)
 - `tests/test_healthz.py`: Health check endpoint (US-18)
+- `tests/test_migrations.py`: Auth schema migration vs. PostgreSQL (US-09, US-22)
 
 ### Coverage Requirements
 

@@ -2,6 +2,7 @@
 .venv
 .idea
 .env
+.env.test
 *.pyc
 .coverage
 .pytest_cache
