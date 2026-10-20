@@ -3,54 +3,22 @@
 Tests verify that the migration script creates the new auth schema correctly,
 drops the old users table, runs exactly once, and is tracked properly.
 
-These tests require PostgreSQL running on localhost:5433.
-Start with: docker-compose -f docker-compose.test.yaml up -d
+Run against the PostgreSQL test database from docker-compose.test.yaml
+(localhost:5434, database test_db). Start it with:
+
+    docker compose -f docker-compose.test.yaml up -d
+
+The migration_engine / migration_session fixtures live in conftest.py
+(US-22: shared Postgres fixtures); migration_session resets the public
+schema before each test for full isolation.
 """
 
-import pytest
-from sqlalchemy import text, inspect
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-
+from sqlalchemy import inspect, text
 from src.migrations.v001_auth_schema import (
-    run_migration,
-    migration_already_applied,
     create_migrations_table,
+    migration_already_applied,
+    run_migration,
 )
-from src.config import get_settings
-
-
-@pytest.fixture
-async def migration_engine():
-    """Create fresh async engine with PostgreSQL for migration tests.
-
-    Each test gets a fresh engine connected to PostgreSQL test database.
-    This ensures PostgreSQL-specific features (CASCADE, constraints) work correctly.
-    """
-    settings = get_settings()
-    engine = create_async_engine(settings.async_database_url, echo=False)
-    yield engine
-    await engine.dispose()
-
-
-@pytest.fixture
-async def migration_session(migration_engine):
-    """Create session for migration tests.
-
-    Each test gets a fresh session. Tables are dropped and recreated
-    to ensure test isolation.
-    """
-    async_session = sessionmaker(
-        migration_engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-    async with async_session() as session:
-        # Drop all tables for clean slate
-        await session.execute(text("DROP SCHEMA public CASCADE"))
-        await session.execute(text("CREATE SCHEMA public"))
-        await session.commit()
-        yield session
 
 
 def get_table_names(sync_conn):
@@ -79,6 +47,7 @@ def get_foreign_keys(sync_conn, table_name):
 
 async def test_migration_creates_users_table(migration_engine, migration_session):
     """Test that migration creates users table with all required columns."""
+
     await create_migrations_table(migration_session)
     await run_migration(migration_session)
 
@@ -98,6 +67,7 @@ async def test_migration_creates_user_identities_table(
     migration_engine, migration_session
 ):
     """Test that migration creates user_identities table."""
+
     await create_migrations_table(migration_session)
     await run_migration(migration_session)
 
@@ -119,6 +89,7 @@ async def test_migration_creates_user_refresh_tokens_table(
     migration_engine, migration_session
 ):
     """Test that migration creates user_refresh_tokens table."""
+
     await create_migrations_table(migration_session)
     await run_migration(migration_session)
 
@@ -139,6 +110,7 @@ async def test_migration_creates_password_reset_tokens_table(
     migration_engine, migration_session
 ):
     """Test that migration creates password_reset_tokens table."""
+
     await create_migrations_table(migration_session)
     await run_migration(migration_session)
 
@@ -160,6 +132,7 @@ async def test_migration_creates_user_audit_log_table(
     migration_engine, migration_session
 ):
     """Test that migration creates user_audit_log table."""
+
     await create_migrations_table(migration_session)
     await run_migration(migration_session)
 
@@ -179,15 +152,20 @@ async def test_migration_creates_user_audit_log_table(
 
 async def test_migration_drops_old_users_table(migration_engine, migration_session):
     """Test that migration drops old users table and creates new one."""
+
     # Arrange: create old users table with data
-    await migration_session.execute(text("""
+    await migration_session.execute(
+        text(
+            """
         CREATE TABLE users (
             name VARCHAR PRIMARY KEY,
             correct INTEGER DEFAULT 0,
             incorrect INTEGER DEFAULT 0,
             points INTEGER DEFAULT 0
         )
-    """))
+    """
+        )
+    )
     await migration_session.execute(
         text(
             "INSERT INTO users (name, correct, incorrect, points) "
@@ -212,6 +190,7 @@ async def test_migration_drops_old_users_table(migration_engine, migration_sessi
 
 async def test_migration_runs_exactly_once(migration_engine, migration_session):
     """Test that migration runs exactly once and is tracked properly."""
+
     # First run: should execute migration
     await create_migrations_table(migration_session)
     await run_migration(migration_session)
@@ -235,6 +214,7 @@ async def test_migration_runs_exactly_once(migration_engine, migration_session):
 
 async def test_migration_creates_indexes(migration_engine, migration_session):
     """Test that migration creates required indexes for performance."""
+
     await create_migrations_table(migration_session)
     await run_migration(migration_session)
 
@@ -263,6 +243,7 @@ async def test_migration_creates_indexes(migration_engine, migration_session):
 
 async def test_migration_creates_foreign_keys(migration_engine, migration_session):
     """Test that migration creates foreign keys with ON DELETE CASCADE."""
+
     await create_migrations_table(migration_session)
     await run_migration(migration_session)
 
@@ -287,15 +268,20 @@ async def test_migration_creates_foreign_keys(migration_engine, migration_sessio
         assert len(fk_constraints) > 0
 
 
-async def test_migration_creates_unique_constraints(migration_engine, migration_session):
-    """Test that migration creates UNIQUE constraints for username, email, and tokens."""
+async def test_migration_creates_unique_constraints(
+    migration_engine, migration_session
+):
+    """Test that migration creates UNIQUE constraints for users and tokens."""
+
     await create_migrations_table(migration_session)
     await run_migration(migration_session)
 
     async with migration_engine.connect() as conn:
         # Check users table has unique constraints
         columns = await conn.run_sync(get_columns, "users")
-        assert columns["username"].get("default") is not None or True  # UNIQUE constraint
+        assert (
+            columns["username"].get("default") is not None or True
+        )  # UNIQUE constraint
         assert columns["email"].get("default") is not None or True
 
         # Check token_hash columns have unique constraints
@@ -308,6 +294,7 @@ async def test_migration_creates_unique_constraints(migration_engine, migration_
 
 async def test_migration_cascade_delete(migration_engine, migration_session):
     """Test that CASCADE delete works correctly for foreign keys."""
+
     await create_migrations_table(migration_session)
     await run_migration(migration_session)
 
