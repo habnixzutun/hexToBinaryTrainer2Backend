@@ -6,6 +6,7 @@ from .auth import (
     UserIdentity,
     UserRefreshToken,
 )
+
 # Game models
 from .game import UserStats
 

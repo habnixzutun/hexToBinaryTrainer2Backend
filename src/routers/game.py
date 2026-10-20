@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
-from sqlalchemy import select, desc
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.engine import get_db
@@ -45,7 +45,9 @@ class LeaderboardResponse(BaseModel):
     entries: list[LeaderboardEntry]
 
 
-@router.post("/correct", status_code=status.HTTP_200_OK, response_model=GameSubmitResponse)
+@router.post(
+    "/correct", status_code=status.HTTP_200_OK, response_model=GameSubmitResponse
+)
 async def record_correct_answer(
     request: Request,
     body: GameActionRequest,
@@ -91,7 +93,9 @@ async def record_correct_answer(
     )
 
 
-@router.post("/incorrect", status_code=status.HTTP_200_OK, response_model=GameSubmitResponse)
+@router.post(
+    "/incorrect", status_code=status.HTTP_200_OK, response_model=GameSubmitResponse
+)
 async def record_incorrect_answer(
     request: Request,
     body: GameActionRequest,
