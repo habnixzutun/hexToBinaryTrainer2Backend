@@ -66,6 +66,11 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
+# SQLAlchemy async switches to greenlets (and aiosqlite runs queries in a
+# worker thread). Without explicit concurrency support, coverage loses the
+# trace after the first await into the DB layer and understates auth router
+# coverage. See US-21 part 2 investigation.
+concurrency = ["greenlet", "thread"]
 omit = [
     "src/init_db.py",  # Setup script, not testable
     "src/routers/game.py",  # Not part of Sprint 2

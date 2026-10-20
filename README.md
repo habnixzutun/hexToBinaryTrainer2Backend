@@ -507,13 +507,23 @@ uv run pytest -v
 - `tests/test_integration_auth.py`: End-to-end auth flows (US-17)
 - `tests/test_healthz.py`: Health check endpoint (US-18)
 - `tests/test_migrations.py`: Auth schema migration vs. PostgreSQL (US-09, US-22)
+- `tests/test_auth_coverage.py`: Auth router edge cases — rate-limit key
+  fallback, verify-email/logout corners (US-21 part 2)
 
 ### Coverage Requirements
 
 The project enforces a minimum coverage of **80%** on all code.
 
+Async coverage note: SQLAlchemy async switches to greenlets and aiosqlite
+runs queries in a worker thread. `[tool.coverage.run]` therefore sets
+`concurrency = ["greenlet", "thread"]` (pyproject.toml). Without it,
+coverage.py loses the trace after the first `await` into the DB layer and
+understates router coverage badly (this made `src/routers/auth.py` look
+like 75 % when existing tests already exercised ~98 % of it).
+
 **Current Test Results:**
-- 123 tests passed
+- 157 tests passed
+- `src/routers/auth.py` at 100 %, total coverage 97 %
 - All authentication flows covered
 - Integration tests verify end-to-end scenarios
 
