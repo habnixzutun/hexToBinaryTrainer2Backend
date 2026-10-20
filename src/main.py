@@ -13,6 +13,7 @@ from src.database.engine import AsyncSessionLocal
 from src.migrations.v001_auth_schema import create_migrations_table, run_migration
 from src.routers.auth import router as auth_router
 from src.routers.user import router as user_router
+from src.services.email_wiring import install_email_service
 
 
 class CacheRequestBodyMiddleware(BaseHTTPMiddleware):
@@ -35,6 +36,8 @@ async def lifespan(app: FastAPI):
 
     async with AsyncSessionLocal() as session:
         await run_migration(session)
+
+    install_email_service(get_settings())
 
     yield
 
