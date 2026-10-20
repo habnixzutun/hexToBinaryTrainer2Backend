@@ -33,7 +33,7 @@ _DB_PW_ENV = "DB_" + "PW"
 
 @pytest.fixture(autouse=True)
 def _hermetic_smtp_env(monkeypatch):
-    """Strip SMTP/BASE_URL from the environment for every test in this module."""
+    """Strip SMTP/BASE_URL/FRONTEND_URL from the environment for every test."""
     for key in (
         "SMTP_HOST",
         "SMTP_PORT",
@@ -41,6 +41,7 @@ def _hermetic_smtp_env(monkeypatch):
         _PASSWORD_ENV,
         "SMTP_FROM_EMAIL",
         "BASE_URL",
+        "FRONTEND_URL",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -183,19 +184,21 @@ def test_smtp_service_constructed_with_correct_params(monkeypatch):
     monkeypatch.setenv("SMTP_HOST", "mail.test")
     monkeypatch.setenv("SMTP_PORT", "2525")
     monkeypatch.setenv("SMTP_FROM_EMAIL", "noreply@test")
-    monkeypatch.setenv("BASE_URL", "https://app.test")
+    monkeypatch.setenv("BASE_URL", "https://api.test")
+    monkeypatch.setenv("FRONTEND_URL", "https://app.test")
     settings = Settings(_env_file=None)
 
     email_wiring.install_email_service(settings)
 
     assert len(calls) == 1
-    host, port, username, pw, from_addr, base = calls[0]
+    host, port, username, pw, from_addr, link_base = calls[0]
     assert host == "mail.test"
     assert port == 2525
     assert username == "alice@test"
     assert pw == PW_A
     assert from_addr == "noreply@test"
-    assert base == "https://app.test"
+    # US-24: email links point to the frontend, not the backend BASE_URL
+    assert link_base == "https://app.test"
 
 
 # --------------------------------------------------------------------------- #
@@ -230,7 +233,8 @@ async def test_startup_lifespan_installs_email_service(monkeypatch):
 
     monkeypatch.setattr(main_module, "AsyncSessionLocal", lambda: _FakeCtx())
     monkeypatch.setattr(main_module, "create_migrations_table", _noop)
-    monkeypatch.setattr(main_module, "run_migration", _noop)
+    monkeypatch.setattr(main_module, "run_v001", _noop)
+    monkeypatch.setattr(main_module, "run_v002", _noop)
 
     async with main_module.lifespan(main_module.app):
         pass

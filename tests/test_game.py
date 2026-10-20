@@ -1,59 +1,99 @@
 """Tests for game endpoints: score tracking and leaderboard."""
 
+from datetime import UTC, datetime
+
 import pytest
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+from src.database.engine import Base, get_db
 from src.main import app
-from src.models.auth import User
+from src.models.auth import User, UserIdentity
 from src.models.game import UserStats
-from src.services.auth_service import create_user
+from src.utils.jwt_utils import create_access_token
+
+TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
+
+USER_ID = "user-game-001"
+USER_EMAIL = "game_test@example.com"
+USER_USERNAME = "GameTester"
 
 
 @pytest.fixture
-async def test_user(session: AsyncSession) -> User:
-    """Create a test user."""
-    user = await create_user(
-        session=session,
-        email="game_test@example.com",
-        username="GameTester",
-        password="Test1234!",
-    )
-    await session.commit()
-    return user
+async def engine():
+    eng = create_async_engine(TEST_DB_URL, echo=False)
+    async with eng.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield eng
+    await eng.dispose()
 
 
 @pytest.fixture
-async def auth_client(test_user: User) -> AsyncClient:
-    """Create an authenticated test client."""
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        login_response = await client.post(
-            "/api/auth/login",
-            json={"email": "game_test@example.com", "password": "Test1234!"},
+async def db_session(engine):
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with async_session() as session:
+        yield session
+        await session.rollback()
+
+
+def _add_verified_user(session: AsyncSession, user_id: str, username: str, email: str):
+    session.add(User(id=user_id, username=username, email=email))
+    session.add(
+        UserIdentity(
+            id=f"identity-{user_id}",
+            user_id=user_id,
+            provider="email",
+            provider_user_id=email,
+            password_hash="irrelevant",
+            verified_at=datetime.now(UTC),
         )
-        token = login_response.json()["access_token"]
-        client.headers["Authorization"] = f"Bearer {token}"
-        yield client
+    )
 
 
-@pytest.mark.asyncio
-async def test_record_correct_answer(auth_client: AsyncClient, session: AsyncSession):
+@pytest.fixture
+async def seeded_db(db_session):
+    _add_verified_user(db_session, USER_ID, USER_USERNAME, USER_EMAIL)
+    await db_session.commit()
+    yield db_session
+
+
+@pytest.fixture
+async def client(engine, seeded_db):
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def override_get_db():
+        async with async_session() as session:
+            yield session
+
+    app.dependency_overrides[get_db] = override_get_db
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+async def auth_client(client):
+    """Test client authenticated as the seeded user."""
+    client.headers["Authorization"] = f"Bearer {create_access_token(USER_ID)}"
+    return client
+
+
+async def test_record_correct_answer(auth_client: AsyncClient):
     """POST /api/game/correct should record correct answer and award bits as points."""
     response = await auth_client.post("/api/game/correct", json={"bits": 8})
 
     assert response.status_code == 200
     data = response.json()
     assert data["message"] == "Correct answer recorded"
-    assert data["user_id"] == data["user_id"]
+    assert data["user_id"] == USER_ID
     assert data["correct_count"] == 1
     assert data["incorrect_count"] == 0
     assert data["points"] == 8  # bits added directly as points
 
 
-@pytest.mark.asyncio
-async def test_record_incorrect_answer(auth_client: AsyncClient, session: AsyncSession):
-    """POST /api/game/incorrect should increment incorrect count and deduct bits*4 points."""
+async def test_record_incorrect_answer(auth_client: AsyncClient):
+    """POST /api/game/incorrect should increment incorrect count and deduct bits*4."""
     response = await auth_client.post("/api/game/incorrect", json={"bits": 4})
 
     assert response.status_code == 200
@@ -64,7 +104,6 @@ async def test_record_incorrect_answer(auth_client: AsyncClient, session: AsyncS
     assert data["points"] == -16  # -(4 bits * 4)
 
 
-@pytest.mark.asyncio
 async def test_multiple_answers_accumulate(auth_client: AsyncClient):
     """Multiple game actions should accumulate stats correctly."""
     await auth_client.post("/api/game/correct", json={"bits": 4})  # +4
@@ -79,7 +118,14 @@ async def test_multiple_answers_accumulate(auth_client: AsyncClient):
     assert data["points"] == 8  # 4 + 8 - 16 + 12 = 8
 
 
-@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["/api/game/correct", "/api/game/incorrect"])
+async def test_game_action_without_token_returns_401(client: AsyncClient, endpoint):
+    """Game actions are protected and require a bearer token."""
+    response = await client.post(endpoint, json={"bits": 8})
+
+    assert response.status_code == 401
+
+
 async def test_leaderboard_returns_wrapped_response(auth_client: AsyncClient):
     """GET /api/game/leaderboard should return wrapped entries array."""
     await auth_client.post("/api/game/correct", json={"bits": 16})
@@ -90,53 +136,33 @@ async def test_leaderboard_returns_wrapped_response(auth_client: AsyncClient):
     data = response.json()
     assert "entries" in data
     assert isinstance(data["entries"], list)
-    assert len(data["entries"]) >= 1
+    assert len(data["entries"]) == 1
 
     entry = data["entries"][0]
-    assert "user_id" in entry
-    assert "username" in entry
-    assert "correct_count" in entry
-    assert "incorrect_count" in entry
-    assert "points" in entry
-    assert entry["username"] == "GameTester"
-    assert entry["correct_count"] == 1
-    assert entry["points"] == 16  # 16 bits = 16 points
+    assert entry == {
+        "user_id": USER_ID,
+        "username": USER_USERNAME,
+        "correct_count": 1,
+        "incorrect_count": 0,
+        "points": 16,  # 16 bits = 16 points
+    }
 
 
-@pytest.mark.asyncio
-async def test_leaderboard_sorted_by_points(session: AsyncSession):
-    """Leaderboard should be sorted by points descending."""
-    from src.services.auth_service import create_user
-
-    user1 = await create_user(
-        session=session,
-        email="player1@example.com",
-        username="Player1",
-        password="Test1234!",
+async def test_leaderboard_sorted_by_points(client: AsyncClient, seeded_db):
+    """Leaderboard should be sorted by points descending (public, no token)."""
+    _add_verified_user(seeded_db, "user-p1", "Player1", "player1@example.com")
+    _add_verified_user(seeded_db, "user-p2", "Player2", "player2@example.com")
+    seeded_db.add_all(
+        [
+            UserStats(user_id="user-p1", correct_count=1, points=50),
+            UserStats(user_id="user-p2", correct_count=2, points=200),
+        ]
     )
-    user2 = await create_user(
-        session=session,
-        email="player2@example.com",
-        username="Player2",
-        password="Test1234!",
-    )
+    await seeded_db.commit()
 
-    stats1 = UserStats(user_id=user1.id, correct_count=1, points=50)
-    stats2 = UserStats(user_id=user2.id, correct_count=2, points=200)
-    session.add_all([stats1, stats2])
-    await session.commit()
+    response = await client.get("/api/game/leaderboard")
 
-    from httpx import AsyncClient, ASGITransport
-    from src.main import app
-
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/api/game/leaderboard")
-        data = response.json()
-
-    entries = data["entries"]
-    assert len(entries) >= 2
-    assert entries[0]["username"] == "Player2"
-    assert entries[0]["points"] == 200
-    assert entries[1]["username"] == "Player1"
-    assert entries[1]["points"] == 50
+    assert response.status_code == 200
+    entries = response.json()["entries"]
+    assert [e["username"] for e in entries] == ["Player2", "Player1"]
+    assert [e["points"] for e in entries] == [200, 50]
