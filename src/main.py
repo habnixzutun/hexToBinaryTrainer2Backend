@@ -10,9 +10,11 @@ from starlette.middleware.cors import CORSMiddleware
 
 from src.config import get_settings
 from src.database.engine import AsyncSessionLocal
-from src.migrations.v001_auth_schema import create_migrations_table, run_migration
+from src.migrations.v001_auth_schema import create_migrations_table, run_migration as run_v001
+from src.migrations.v002_game_stats import run_migration as run_v002
 from src.routers.auth import router as auth_router
 from src.routers.user import router as user_router
+from src.routers.game import router as game_router
 from src.services.email_wiring import install_email_service
 
 
@@ -35,7 +37,8 @@ async def lifespan(app: FastAPI):
         await session.commit()
 
     async with AsyncSessionLocal() as session:
-        await run_migration(session)
+        await run_v001(session)
+        await run_v002(session)
 
     install_email_service(get_settings())
 
@@ -60,6 +63,7 @@ app.add_middleware(CacheRequestBodyMiddleware)
 
 app.include_router(auth_router)
 app.include_router(user_router)
+app.include_router(game_router)
 
 
 @app.get("/healthz")

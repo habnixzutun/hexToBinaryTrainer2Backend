@@ -6,6 +6,8 @@ from .auth import (
     UserIdentity,
     UserRefreshToken,
 )
+# Game models
+from .game import UserStats
 
 __all__ = [
     "User",
@@ -13,4 +15,5 @@ __all__ = [
     "UserRefreshToken",
     "PasswordResetToken",
     "UserAuditLog",
+    "UserStats",
 ]
