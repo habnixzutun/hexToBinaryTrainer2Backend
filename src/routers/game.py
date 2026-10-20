@@ -12,8 +12,6 @@ from src.routers.user import _extract_bearer_user_id
 
 router = APIRouter(prefix="/api/game", tags=["game"])
 
-POINTS_PER_BIT = 10
-
 
 class GameActionRequest(BaseModel):
     """Request body for correct/incorrect answer submission."""
@@ -74,12 +72,12 @@ async def record_correct_answer(
             user_id=user_id,
             correct_count=1,
             incorrect_count=0,
-            points=body.bits * POINTS_PER_BIT,
+            points=body.bits,
         )
         session.add(stats)
     else:
         stats.correct_count += 1
-        stats.points += body.bits * POINTS_PER_BIT
+        stats.points += body.bits
 
     await session.commit()
     await session.refresh(stats)
@@ -120,11 +118,12 @@ async def record_incorrect_answer(
             user_id=user_id,
             correct_count=0,
             incorrect_count=1,
-            points=0,
+            points=-(body.bits * 4),
         )
         session.add(stats)
     else:
         stats.incorrect_count += 1
+        stats.points -= body.bits * 4
 
     await session.commit()
     await session.refresh(stats)

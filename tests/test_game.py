@@ -39,7 +39,7 @@ async def auth_client(test_user: User) -> AsyncClient:
 
 @pytest.mark.asyncio
 async def test_record_correct_answer(auth_client: AsyncClient, session: AsyncSession):
-    """POST /api/game/correct should record correct answer and award points."""
+    """POST /api/game/correct should record correct answer and award bits as points."""
     response = await auth_client.post("/api/game/correct", json={"bits": 8})
 
     assert response.status_code == 200
@@ -48,12 +48,12 @@ async def test_record_correct_answer(auth_client: AsyncClient, session: AsyncSes
     assert data["user_id"] == data["user_id"]
     assert data["correct_count"] == 1
     assert data["incorrect_count"] == 0
-    assert data["points"] == 80  # 8 bits * 10 points
+    assert data["points"] == 8  # bits added directly as points
 
 
 @pytest.mark.asyncio
 async def test_record_incorrect_answer(auth_client: AsyncClient, session: AsyncSession):
-    """POST /api/game/incorrect should increment incorrect count without points."""
+    """POST /api/game/incorrect should increment incorrect count and deduct bits*4 points."""
     response = await auth_client.post("/api/game/incorrect", json={"bits": 4})
 
     assert response.status_code == 200
@@ -61,22 +61,22 @@ async def test_record_incorrect_answer(auth_client: AsyncClient, session: AsyncS
     assert data["message"] == "Incorrect answer recorded"
     assert data["correct_count"] == 0
     assert data["incorrect_count"] == 1
-    assert data["points"] == 0
+    assert data["points"] == -16  # -(4 bits * 4)
 
 
 @pytest.mark.asyncio
 async def test_multiple_answers_accumulate(auth_client: AsyncClient):
     """Multiple game actions should accumulate stats correctly."""
-    await auth_client.post("/api/game/correct", json={"bits": 4})
-    await auth_client.post("/api/game/correct", json={"bits": 8})
-    await auth_client.post("/api/game/incorrect", json={"bits": 4})
+    await auth_client.post("/api/game/correct", json={"bits": 4})  # +4
+    await auth_client.post("/api/game/correct", json={"bits": 8})  # +8
+    await auth_client.post("/api/game/incorrect", json={"bits": 4})  # -16
 
-    response = await auth_client.post("/api/game/correct", json={"bits": 12})
+    response = await auth_client.post("/api/game/correct", json={"bits": 12})  # +12
     data = response.json()
 
     assert data["correct_count"] == 3
     assert data["incorrect_count"] == 1
-    assert data["points"] == 240  # (4 + 8 + 12) * 10
+    assert data["points"] == 8  # 4 + 8 - 16 + 12 = 8
 
 
 @pytest.mark.asyncio
@@ -100,7 +100,7 @@ async def test_leaderboard_returns_wrapped_response(auth_client: AsyncClient):
     assert "points" in entry
     assert entry["username"] == "GameTester"
     assert entry["correct_count"] == 1
-    assert entry["points"] == 160
+    assert entry["points"] == 16  # 16 bits = 16 points
 
 
 @pytest.mark.asyncio
