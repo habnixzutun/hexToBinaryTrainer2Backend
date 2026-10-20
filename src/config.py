@@ -1,6 +1,12 @@
 from functools import lru_cache
 
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _reveal(secret: SecretStr) -> str:
+    """Return the plaintext inside a SecretStr. Internal only -- never log this."""
+    return secret.get_secret_value()
 
 
 class Settings(BaseSettings):
@@ -13,6 +19,22 @@ class Settings(BaseSettings):
     db_user: str = ""
     allowed_origins: list[str] = ["http://localhost:5173"]
     cookie_secure: bool = True
+
+    smtp_host: str = "smtp.strato.de"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: SecretStr = SecretStr("")
+    smtp_from_email: str = ""
+    base_url: str = "http://localhost:8000"
+
+    @model_validator(mode="after")
+    def _validate_smtp(self) -> "Settings":
+        if self.smtp_user:
+            if not _reveal(self.smtp_password):
+                raise ValueError("SMTP config incomplete: smtp_password is required")
+            if not self.smtp_from_email:
+                raise ValueError("SMTP config incomplete: smtp_from_email is required")
+        return self
 
     @property
     def async_database_url(self) -> str:
