@@ -1,14 +1,12 @@
 """Tests for POST /api/auth/register and POST /api/auth/verify-email (US-13)."""
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
 
 import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-
 from src.database.engine import Base, get_db
 from src.main import app
 from src.models.auth import User, UserIdentity  # noqa: F401
@@ -85,7 +83,9 @@ class TestRegister:
         response = await client.post("/api/auth/register", json=VALID_PAYLOAD)
         assert response.status_code == 201
         data = response.json()
-        assert data["message"] == "Registration successful. Check your email to verify your account."
+        assert data["message"] == (
+            "Registration successful. Check your email to verify your account."
+        )
         assert "user_id" in data
 
     async def test_successful_registration_sends_verification_email(
@@ -128,7 +128,11 @@ class TestRegister:
 
     async def test_rate_limit_returns_429_after_three_attempts(self, client):
         payloads = [
-            {"email": f"user{i}@example.com", "username": f"user{i}", "password": "StrongPass1!"}
+            {
+                "email": f"user{i}@example.com",
+                "username": f"user{i}",
+                "password": "StrongPass1!",
+            }
             for i in range(4)
         ]
         for i in range(3):
@@ -185,7 +189,9 @@ class TestVerifyEmail:
         assert "expired" in response.json()["detail"].lower()
 
     async def test_invalid_token_returns_400(self, client):
-        response = await client.post("/api/auth/verify-email", json={"token": "not.a.valid.token"})
+        response = await client.post(
+            "/api/auth/verify-email", json={"token": "not.a.valid.token"}
+        )
         assert response.status_code == 400
 
     async def test_wrong_token_type_returns_400(self, client):

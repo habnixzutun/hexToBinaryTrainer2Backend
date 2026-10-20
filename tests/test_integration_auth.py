@@ -5,24 +5,17 @@ end-to-end: register → verify → login → refresh → logout, password reset
 email change, password change, and multi-device scenarios.
 """
 
-from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-
 from src.database.engine import Base, get_db
 from src.main import app
-from src.models.auth import User, UserIdentity, UserRefreshToken
-from src.routers.auth import get_email_service as auth_get_email_service
 from src.routers.auth import set_email_service as auth_set_email_service
 from src.routers.user import get_email_service as user_get_email_service
 from src.services.email_service import MockEmailService
-from src.utils.jwt_utils import create_access_token
-from src.utils.password import hash_password
-
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -30,7 +23,8 @@ TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 @pytest.fixture(autouse=True)
 def reset_rate_limiters():
     """Reset rate limiters between tests."""
-    from src.routers.auth import _registration_attempts, limiter as auth_limiter
+    from src.routers.auth import _registration_attempts
+    from src.routers.auth import limiter as auth_limiter
 
     _registration_attempts.clear()
     auth_limiter.reset()
@@ -189,7 +183,9 @@ async def test_complete_password_reset_flow(client, mock_email_service, engine):
     old_password = "OldPass1!"
     new_password = "NewPass2@"
 
-    await register_and_verify(client, mock_email_service, email, "flowreset", old_password)
+    await register_and_verify(
+        client, mock_email_service, email, "flowreset", old_password
+    )
 
     # Request password reset
     reset_request = await client.post(
@@ -228,12 +224,15 @@ async def test_complete_password_reset_flow(client, mock_email_service, engine):
 
 
 async def test_complete_email_change_flow(client, mock_email_service):
-    """Register → Verify → Login → Change Email → Verify New Email → Login with new email."""
+    """Register → Verify → Login → Change Email → Verify New Email → Login with new
+    email."""
     old_email = "old-email@example.com"
     new_email = "new-email@example.com"
     password = "Password1!"
 
-    await register_and_verify(client, mock_email_service, old_email, "emailchanger", password)
+    await register_and_verify(
+        client, mock_email_service, old_email, "emailchanger", password
+    )
 
     # Login to get access token
     login_response = await client.post(
@@ -281,12 +280,15 @@ async def test_complete_email_change_flow(client, mock_email_service):
 
 
 async def test_complete_password_change_flow(client, mock_email_service):
-    """Register → Verify → Login → Change Password → Logout → Login with new password."""
+    """Register → Verify → Login → Change Password → Logout → Login with new
+    password."""
     email = "pw-change-flow@example.com"
     old_password = "OldPass1!"
     new_password = "NewPass2@"
 
-    await register_and_verify(client, mock_email_service, email, "pwchangeflow", old_password)
+    await register_and_verify(
+        client, mock_email_service, email, "pwchangeflow", old_password
+    )
 
     # Login
     login_response = await client.post(
@@ -333,7 +335,9 @@ async def test_password_change_invalidates_all_sessions(client, mock_email_servi
     old_password = "OldPass1!"
     new_password = "NewPass2@"
 
-    await register_and_verify(client, mock_email_service, email, "sessionkill", old_password)
+    await register_and_verify(
+        client, mock_email_service, email, "sessionkill", old_password
+    )
 
     # Login on device A
     login_a = await client.post(
@@ -382,7 +386,9 @@ async def test_logout_device_a_does_not_affect_device_b(client, mock_email_servi
     email = "multi-device@example.com"
     password = "Password1!"
 
-    await register_and_verify(client, mock_email_service, email, "multidevice", password)
+    await register_and_verify(
+        client, mock_email_service, email, "multidevice", password
+    )
 
     # Login on device A
     login_a = await client.post(
@@ -420,13 +426,17 @@ async def test_logout_device_a_does_not_affect_device_b(client, mock_email_servi
 # ---------------------------------------------------------------------------
 
 
-async def test_password_reset_invalidates_all_sessions(client, mock_email_service, engine):
+async def test_password_reset_invalidates_all_sessions(
+    client, mock_email_service, engine
+):
     """After password reset, all refresh tokens are revoked."""
     email = "reset-invalidate@example.com"
     old_password = "OldPass1!"
     new_password = "NewPass2@"
 
-    await register_and_verify(client, mock_email_service, email, "resetkill", old_password)
+    await register_and_verify(
+        client, mock_email_service, email, "resetkill", old_password
+    )
 
     # Login to get a refresh token
     login_response = await client.post(
@@ -494,7 +504,6 @@ async def test_expired_reset_token_cannot_be_reused(client, mock_email_service):
 async def test_audit_log_entries_created(client, mock_email_service, engine):
     """Password change and reset create audit log entries."""
     from src.models.auth import UserAuditLog
-    from sqlalchemy import select
 
     email = "audit-flow@example.com"
     password = "Password1!"
@@ -535,7 +544,9 @@ async def test_username_change_cooldown_integration(client, mock_email_service):
     email = "username-cooldown@example.com"
     password = "Password1!"
 
-    await register_and_verify(client, mock_email_service, email, "cooldownuser", password)
+    await register_and_verify(
+        client, mock_email_service, email, "cooldownuser", password
+    )
 
     # Login
     login_response = await client.post(

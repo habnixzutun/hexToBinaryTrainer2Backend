@@ -3,9 +3,9 @@
 Verifies that deployment files are properly configured.
 """
 
-import pytest
-import yaml
 from pathlib import Path
+
+import yaml
 
 
 class TestDeploymentConfig:

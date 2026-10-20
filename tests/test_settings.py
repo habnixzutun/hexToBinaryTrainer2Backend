@@ -1,13 +1,13 @@
 """Tests for Settings factory function (US-05).
 
-Verifies that Settings uses factory pattern with lru_cache instead of module-level instantiation.
+Verifies that Settings uses factory pattern with lru_cache instead of module-level
+instantiation.
 """
 
-import pytest
-from unittest.mock import patch
 import os
+from unittest.mock import patch
 
-from src.config import get_settings, Settings
+from src.config import Settings, get_settings
 
 
 class TestGetSettings:
@@ -28,7 +28,9 @@ class TestGetSettings:
 
     def test_get_settings_uses_env_variables(self):
         """Verify get_settings reads from environment variables."""
-        with patch.dict(os.environ, {"DB_HOST": "test-host", "DB_PORT": "9999"}, clear=True):
+        with patch.dict(
+            os.environ, {"DB_HOST": "test-host", "DB_PORT": "9999"}, clear=True
+        ):
             # Clear cache to force re-read
             get_settings.cache_clear()
             settings = get_settings()
@@ -41,7 +43,11 @@ class TestGetSettings:
 
     def test_settings_has_default_values(self):
         """Verify Settings class has sensible defaults."""
-        with patch.dict(os.environ, {"DB_HOST": "localhost", "DB_PORT": "5432", "DB_NAME": "test_db"}, clear=False):
+        with patch.dict(
+            os.environ,
+            {"DB_HOST": "localhost", "DB_PORT": "5432", "DB_NAME": "test_db"},
+            clear=False,
+        ):
             settings = Settings()
         assert settings.db_host == "localhost"
         assert settings.db_port == 5432

@@ -7,7 +7,6 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-
 from src.database.engine import Base, get_db
 from src.main import app
 from src.models.auth import User, UserIdentity, UserRefreshToken
@@ -192,8 +191,8 @@ async def test_change_password_invalid_bearer_token_returns_401(client):
 
 async def test_change_password_expired_token_returns_401(client):
     """Expired bearer token returns 401."""
+
     import jwt as pyjwt
-    from datetime import timedelta
 
     payload = {
         "sub": USER_ID,
@@ -201,7 +200,7 @@ async def test_change_password_expired_token_returns_401(client):
         "exp": datetime(2000, 1, 1, tzinfo=UTC),
         "iat": datetime(1999, 1, 1, tzinfo=UTC),
     }
-    from src.utils.jwt_utils import JWT_SECRET, JWT_ALGORITHM
+    from src.utils.jwt_utils import JWT_ALGORITHM, JWT_SECRET
     expired_token = pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
     response = await client.post(
