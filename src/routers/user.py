@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.engine import get_db
 from src.models.auth import User, UserIdentity
+from src.models.game import UserStats
 from src.services.audit_service import log_audit_action, send_security_notification
 from src.services.email_service import EmailService, MockEmailService
 from src.services.user_service import change_password
@@ -58,6 +59,50 @@ def _extract_bearer_user_id(request: Request) -> str:
 
 
 router = APIRouter(tags=["user"])
+
+
+class UserMeResponse(BaseModel):
+    id: str
+    username: str
+    email: str
+    correct_count: int
+    incorrect_count: int
+    points: int
+
+
+@router.get(
+    "/api/user/me",
+    status_code=status.HTTP_200_OK,
+    response_model=UserMeResponse,
+)
+async def get_current_user_profile(
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+) -> UserMeResponse:
+    """Return the authenticated user's profile and game stats."""
+    user_id = _extract_bearer_user_id(request)
+
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    stats_result = await session.execute(
+        select(UserStats).where(UserStats.user_id == user_id)
+    )
+    stats = stats_result.scalar_one_or_none()
+
+    return UserMeResponse(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        correct_count=stats.correct_count if stats else 0,
+        incorrect_count=stats.incorrect_count if stats else 0,
+        points=stats.points if stats else 0,
+    )
 
 
 class EmailChangeRequest(BaseModel):
