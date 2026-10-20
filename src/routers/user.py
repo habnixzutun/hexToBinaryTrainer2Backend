@@ -1,4 +1,4 @@
-"""User router: email/username/password change endpoints (US-16, US-19)."""
+"""User router: current user info and email/username/password changes (US-16, US-19)."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.engine import get_db
 from src.models.auth import User, UserIdentity
+from src.models.game import UserStats
 from src.services.audit_service import log_audit_action, send_security_notification
 from src.services.email_service import EmailService, MockEmailService
 from src.services.user_service import change_password
@@ -70,6 +71,50 @@ class EmailChangeVerifyRequest(BaseModel):
 
 class UsernameChangeRequest(BaseModel):
     new_username: str = Field(min_length=3, max_length=50)
+
+
+class UserMeResponse(BaseModel):
+    id: str
+    username: str
+    email: str
+    correct_count: int
+    incorrect_count: int
+    points: int
+
+
+@router.get(
+    "/api/user/me",
+    status_code=status.HTTP_200_OK,
+    response_model=UserMeResponse,
+)
+async def get_current_user(
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+) -> UserMeResponse:
+    user_id = _extract_bearer_user_id(request)
+
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found.",
+        )
+
+    # user_stats row is created lazily on the first game action (see game.py).
+    stats_result = await session.execute(
+        select(UserStats).where(UserStats.user_id == user_id)
+    )
+    stats = stats_result.scalar_one_or_none()
+
+    return UserMeResponse(
+        id=user.id,
+        username=user.username,
+        email=user.email,
+        correct_count=stats.correct_count if stats else 0,
+        incorrect_count=stats.incorrect_count if stats else 0,
+        points=stats.points if stats else 0,
+    )
 
 
 @router.patch("/api/user/email", status_code=status.HTTP_200_OK)
