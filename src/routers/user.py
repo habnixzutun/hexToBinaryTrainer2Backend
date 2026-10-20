@@ -1,4 +1,4 @@
-"""User router: email/username/password change endpoints (US-16, US-19)."""
+"""User router: current user info and email/username/password changes (US-16, US-19)."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -61,6 +61,18 @@ def _extract_bearer_user_id(request: Request) -> str:
 router = APIRouter(tags=["user"])
 
 
+class EmailChangeRequest(BaseModel):
+    new_email: EmailStr
+
+
+class EmailChangeVerifyRequest(BaseModel):
+    token: str
+
+
+class UsernameChangeRequest(BaseModel):
+    new_username: str = Field(min_length=3, max_length=50)
+
+
 class UserMeResponse(BaseModel):
     id: str
     username: str
@@ -75,21 +87,21 @@ class UserMeResponse(BaseModel):
     status_code=status.HTTP_200_OK,
     response_model=UserMeResponse,
 )
-async def get_current_user_profile(
+async def get_current_user(
     request: Request,
     session: AsyncSession = Depends(get_db),
 ) -> UserMeResponse:
-    """Return the authenticated user's profile and game stats."""
     user_id = _extract_bearer_user_id(request)
 
     result = await session.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found.",
         )
 
+    # user_stats row is created lazily on the first game action (see game.py).
     stats_result = await session.execute(
         select(UserStats).where(UserStats.user_id == user_id)
     )
@@ -103,18 +115,6 @@ async def get_current_user_profile(
         incorrect_count=stats.incorrect_count if stats else 0,
         points=stats.points if stats else 0,
     )
-
-
-class EmailChangeRequest(BaseModel):
-    new_email: EmailStr
-
-
-class EmailChangeVerifyRequest(BaseModel):
-    token: str
-
-
-class UsernameChangeRequest(BaseModel):
-    new_username: str = Field(min_length=3, max_length=50)
 
 
 @router.patch("/api/user/email", status_code=status.HTTP_200_OK)
