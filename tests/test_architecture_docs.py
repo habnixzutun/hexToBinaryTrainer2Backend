@@ -3,7 +3,6 @@
 Verifies that architecture documentation exists and is comprehensive.
 """
 
-import pytest
 from pathlib import Path
 
 
@@ -65,4 +64,6 @@ class TestArchitectureDocumentation:
         if readme.exists():
             content = readme.read_text()
             # Should link to architecture docs
-            assert "docs/architecture.md" in content or "architecture" in content.lower()
+            assert (
+                "docs/architecture.md" in content or "architecture" in content.lower()
+            )

@@ -1,21 +1,18 @@
 """Unit tests for Sprint 2 services (auth, password_reset, user, email)."""
 
+from datetime import UTC, datetime
+
 import pytest
-from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
-
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-
 from src.database.engine import Base
-from src.models.auth import User, UserIdentity, PasswordResetToken, UserRefreshToken
-from src.services.auth_service import login, refresh, logout
+from src.models.auth import PasswordResetToken, User, UserIdentity
+from src.services.auth_service import login, logout, refresh
+from src.services.email_service import MockEmailService
 from src.services.password_reset_service import request_password_reset, reset_password
 from src.services.user_service import change_password
-from src.services.email_service import MockEmailService
 from src.utils.password import hash_password
-
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -26,7 +23,9 @@ async def db_session():
     engine = create_async_engine(TEST_DB_URL, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    async_session_maker = sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async_session_maker = sessionmaker(
+        engine, expire_on_commit=False, class_=AsyncSession
+    )
     async with async_session_maker() as session:
         yield session
     await engine.dispose()

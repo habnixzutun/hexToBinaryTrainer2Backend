@@ -1,9 +1,11 @@
 """Smoke test: verifies test infrastructure works.
 
 This test must pass after Task 1 is complete.
-Before Task 1: fails because src.config.Settings() crashes on import without DB_* env vars.
+Before Task 1: fails because src.config.Settings() crashes on import without DB_*
+env vars.
 After Task 1: passes because conftest.py sets env vars before any src import.
-US-05: Settings now uses factory pattern (get_settings()) instead of module-level instantiation.
+US-05: Settings now uses factory pattern (get_settings()) instead of module-level
+instantiation.
 """
 
 

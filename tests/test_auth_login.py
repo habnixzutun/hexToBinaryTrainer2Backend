@@ -1,18 +1,15 @@
 """Tests for US-14: Login, Token Refresh, and Logout endpoints."""
 
-import hashlib
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-
 from src.database.engine import Base, get_db
 from src.main import app
 from src.models.auth import User, UserIdentity, UserRefreshToken
 from src.utils.password import hash_password
-
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 

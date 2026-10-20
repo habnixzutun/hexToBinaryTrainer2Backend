@@ -7,7 +7,6 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-
 from src.database.engine import Base, get_db
 from src.main import app
 from src.models.auth import User, UserIdentity

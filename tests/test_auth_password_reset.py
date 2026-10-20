@@ -3,20 +3,18 @@
 import hashlib
 from datetime import UTC, datetime, timedelta
 
+import jwt as pyjwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-
 from src.database.engine import Base, get_db
 from src.main import app
 from src.models.auth import PasswordResetToken, User, UserIdentity, UserRefreshToken
 from src.services.email_service import MockEmailService
-from src.utils.jwt_utils import JWT_ALGORITHM, JWT_SECRET, create_password_reset_token
+from src.utils.jwt_utils import JWT_ALGORITHM, JWT_SECRET
 from src.utils.password import hash_password
-
-import jwt as pyjwt
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -76,7 +74,7 @@ async def client(engine, seeded_db, mock_email_service):
         async with async_session() as session:
             yield session
 
-    from src.routers.auth import get_email_service, set_email_service
+    from src.routers.auth import set_email_service
 
     set_email_service(mock_email_service)
     app.dependency_overrides[get_db] = override_get_db
@@ -102,7 +100,9 @@ def _make_expired_reset_token(user_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def test_request_password_reset_existing_email_returns_200(client, mock_email_service):
+async def test_request_password_reset_existing_email_returns_200(
+    client, mock_email_service
+):
     """Request with existing email returns 200 and sends reset email."""
     response = await client.post(
         "/api/auth/request-password-reset",
@@ -288,5 +288,7 @@ async def test_reset_password_weak_password_returns_400(client):
 
 async def test_reset_password_missing_fields_returns_422(client):
     """Missing required fields returns 422."""
-    response = await client.post("/api/auth/reset-password", json={"token": "sometoken"})
+    response = await client.post(
+        "/api/auth/reset-password", json={"token": "sometoken"}
+    )
     assert response.status_code == 422
