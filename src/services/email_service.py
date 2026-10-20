@@ -2,10 +2,12 @@
 
 import asyncio
 import smtplib
+import ssl
 from email.mime.text import MIMEText
 from typing import Protocol
 
 SMTP_TIMEOUT_SECONDS = 10
+IMPLICIT_SSL_PORT = 465
 
 
 class EmailService(Protocol):
@@ -74,12 +76,26 @@ class SMTPEmailService:
         msg["From"] = self._from
         msg["To"] = to_email
 
-        with smtplib.SMTP(
-            self._host, self._port, timeout=SMTP_TIMEOUT_SECONDS
-        ) as smtp:
-            smtp.starttls()
+        with self._connect() as smtp:
             smtp.login(self._username, self._password)
             smtp.sendmail(self._from, to_email, msg.as_string())
+
+    def _connect(self):
+        """Open the SMTP connection matching the configured port.
+
+        Port 465 uses implicit TLS (SMTP_SSL) with no STARTTLS handshake;
+        any other port (typically 587) upgrades a plain connection via STARTTLS.
+        """
+        if self._port == IMPLICIT_SSL_PORT:
+            return smtplib.SMTP_SSL(
+                self._host,
+                self._port,
+                timeout=SMTP_TIMEOUT_SECONDS,
+                context=ssl.create_default_context(),
+            )
+        smtp = smtplib.SMTP(self._host, self._port, timeout=SMTP_TIMEOUT_SECONDS)
+        smtp.starttls()
+        return smtp
 
     async def _send(self, to_email: str, subject: str, body: str) -> None:
         await asyncio.wait_for(
