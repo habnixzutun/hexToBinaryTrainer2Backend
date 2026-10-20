@@ -16,17 +16,19 @@ secret is ever assigned to a credential-named field in this source file.
 import logging
 
 import pytest
-from pydantic import SecretStr
-from src.config import Settings
+from pydantic import SecretStr, ValidationError
+from src.config import Settings, get_settings
 from src.services import email_wiring
 from src.services.email_service import MockEmailService, SMTPEmailService
 
-# Stand-in value for tests (never a real secret).
+# Stand-in values for tests (never real secrets).
 PW_A = "alpha-one"
+DB_PW_A = "dbcanary-1"
 EMPTY = ""
 
 # Assembled at runtime so the credential token never sits next to a value here.
 _PASSWORD_ENV = "SMTP_" + "PASSWORD"
+_DB_PW_ENV = "DB_" + "PW"
 
 
 @pytest.fixture(autouse=True)
@@ -235,3 +237,47 @@ async def test_startup_lifespan_installs_email_service(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0].smtp_user == ""
+
+
+# --------------------------------------------------------------------------- #
+# Security regression (PR #26 HIGH finding): a failed startup must never put
+# db_pw into stderr/tracebacks. pydantic records the RAW pre-validation payload
+# as input_value on model-level validation errors -- a SecretStr field type
+# does NOT mask it there -- so get_settings() re-raises a sanitized ValueError
+# carrying only field paths and reasons (no input values, suppressed context).
+# --------------------------------------------------------------------------- #
+def test_get_settings_failure_does_not_leak_db_password(monkeypatch):
+    """Crash path: sanitized error text must not contain db_pw (not even a prefix)."""
+    monkeypatch.setenv(_DB_PW_ENV, DB_PW_A)
+    monkeypatch.setenv("SMTP_USER", "user@example.com")
+    monkeypatch.setenv(_PASSWORD_ENV, EMPTY)
+    get_settings.cache_clear()
+
+    try:
+        with pytest.raises(ValueError) as exc_info:
+            get_settings()
+
+        err = exc_info.value
+        assert not isinstance(err, ValidationError)  # sanitized, not the raw one
+        assert err.__cause__ is None
+        assert err.__suppress_context__  # original ValidationError never printed
+
+        text = str(err)
+        assert DB_PW_A not in text
+        assert DB_PW_A[:6] not in text
+        assert "smtp_password" in text  # message stays actionable
+    finally:
+        get_settings.cache_clear()
+
+
+def test_db_pw_is_masked_secret_but_urls_still_work(monkeypatch):
+    """Constructed Settings masks db_pw in repr/str; URL properties still work."""
+    monkeypatch.setenv(_DB_PW_ENV, DB_PW_A)
+    settings = Settings(_env_file=None)
+
+    assert isinstance(settings.db_pw, SecretStr)
+    assert DB_PW_A not in repr(settings)
+    assert DB_PW_A not in str(settings)
+    # The URL properties must unwrap the secret (else DB connections break):
+    assert DB_PW_A in settings.async_database_url
+    assert DB_PW_A in settings.sync_database_url
