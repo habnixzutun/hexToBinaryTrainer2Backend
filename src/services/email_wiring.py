@@ -37,7 +37,7 @@ def build_email_service(settings: Settings) -> EmailService:
             settings.smtp_user,
             _unwrap_secret(settings.smtp_password),
             settings.smtp_from_email,
-            settings.base_url,
+            settings.frontend_url,
         )
     logger.info("Using mock email service (development)")
     return MockEmailService()
