@@ -230,7 +230,11 @@ async def register(
     await session.commit()
 
     verification_token = create_verification_token(user_id)
-    await email_service.send_verification_email(body.email, verification_token)
+    try:
+        await email_service.send_verification_email(body.email, verification_token)
+    except Exception as e:
+        # Log but don't fail registration if email can't be sent (e.g. SMTP unavailable)
+        print(f"[WARN] Could not send verification email: {e}")
 
     return RegisterResponse(
         message="Registration successful. Check your email to verify your account.",
