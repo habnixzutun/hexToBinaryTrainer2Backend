@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     smtp_password: SecretStr = SecretStr("")
     smtp_from_email: str = ""
     base_url: str = "http://localhost:8000"
+    frontend_url: str = "http://localhost:5173"
 
     @model_validator(mode="after")
     def _validate_smtp(self) -> "Settings":
