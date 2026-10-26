@@ -1,0 +1,47 @@
+# Dependencies & virtual environments
+.venv/
+
+# Git
+.git/
+.github/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python caches & bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environment & secrets
+.env
+.env.*
+.env.test.example
+
+# Tests (not needed in production image)
+tests/
+
+# Documentation
+docs/
+README.md
+
+# Docker (self-referencing)
+docker-compose*.yaml
+Dockerfile
+.dockerignore
+
+# macOS
+.DS_Store
+
+# Generated output
+graphify-out/
+
+# Misc
+*.log
