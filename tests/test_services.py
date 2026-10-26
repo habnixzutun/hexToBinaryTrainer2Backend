@@ -109,11 +109,15 @@ async def test_login_unverified_account(db_session, unverified_user):
 
 @pytest.mark.asyncio
 async def test_refresh_success(db_session, test_user):
-    """Test successful token refresh."""
+    """Test successful token refresh (US-02: rotation returns both tokens)."""
     _, refresh_token = await login(db_session, "test@example.com", "TestPass123!")
-    new_access_token = await refresh(db_session, refresh_token)
+    new_access_token, new_refresh_token = await refresh(db_session, refresh_token)
     assert new_access_token is not None
+    assert new_refresh_token is not None
     assert isinstance(new_access_token, str)
+    assert isinstance(new_refresh_token, str)
+    # Rotation: new refresh token must differ from the one we presented
+    assert new_refresh_token != refresh_token
 
 
 @pytest.mark.asyncio
@@ -125,12 +129,17 @@ async def test_refresh_invalid_token(db_session):
 
 @pytest.mark.asyncio
 async def test_logout_revokes_token(db_session, test_user):
-    """Test logout revokes the refresh token."""
+    """Test logout revokes the refresh token.
+
+    US-02 update: presenting a revoked token now triggers the replay-detection
+    path (all sessions revoked, ValueError("replay_detected")), not the
+    generic "unauthorized" path.
+    """
     _, refresh_token = await login(db_session, "test@example.com", "TestPass123!")
     await logout(db_session, refresh_token)
 
-    # Token should be revoked, refresh should fail
-    with pytest.raises(ValueError, match="unauthorized"):
+    # Token should be revoked, refresh should fail with replay_detected
+    with pytest.raises(ValueError, match="replay_detected"):
         await refresh(db_session, refresh_token)
 
 
