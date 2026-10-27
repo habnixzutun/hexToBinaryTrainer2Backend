@@ -485,7 +485,7 @@ async def test_refresh_replay_audit_metadata(client, engine):
 
 async def test_refresh_replay_sends_security_notification(client):
     """AC 6: send_security_notification is called on replay detection."""
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import ANY, AsyncMock, patch
 
     login = await client.post(
         "/api/auth/login",
@@ -504,10 +504,10 @@ async def test_refresh_replay_sends_security_notification(client):
     ) as mock_notify:
         response = await client.post("/api/auth/refresh")
         assert response.status_code == 401
-        mock_notify.assert_called_once_with(
-            user_id="user-refresh-001",
-            action="refresh_token_replay_detected",
-        )
+        mock_notify.assert_called_once()
+        call_kwargs = mock_notify.call_args.kwargs
+        assert call_kwargs["user_id"] == "user-refresh-001"
+        assert call_kwargs["action"] == "refresh_token_replay_detected"
 
 
 # ---------------------------------------------------------------------------

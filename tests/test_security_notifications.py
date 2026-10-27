@@ -315,35 +315,55 @@ async def test_email_service_failure_is_swallowed(db_session, test_user):
 
 
 @pytest.mark.asyncio
-async def test_audit_service_wrapper_no_email_service_is_noop(db_session, test_user):
-    """send_security_notification is currently a placeholder (no-op)."""
+async def test_audit_service_wrapper_dispatches_notification(db_session, test_user):
+    """send_security_notification delegates to SecurityNotificationService."""
     from src.services.audit_service import send_security_notification
+    from src.services.email_wiring import get_email_service
 
-    # send_security_notification is a placeholder that does nothing
-    await send_security_notification(
-        user_id=test_user.id,
-        action="password_reset",
-    )
+    # Install a mock email service
+    mock_email = MockEmailService()
+    from src.services import email_wiring
+    original = email_wiring._default_service
+    email_wiring._default_service = mock_email
+
+    try:
+        await send_security_notification(
+            db_session,
+            user_id=test_user.id,
+            action="password_reset",
+        )
+
+        # Verify an email was sent
+        assert len(mock_email.sent) == 1
+        assert mock_email.sent[0]["type"] == "raw"
+        assert "Security Alert" in mock_email.sent[0]["subject"]
+    finally:
+        email_wiring._default_service = original
 
 
 @pytest.mark.asyncio
-async def test_audit_service_wrapper_dispatches_with_email_service(
-    db_session, test_user
-):
-    """send_security_notification is a placeholder and does not send emails."""
+async def test_audit_service_wrapper_with_metadata(db_session, test_user):
+    """send_security_notification passes metadata to the notification service."""
     from src.services.audit_service import send_security_notification
+    from src.services import email_wiring
 
-    email_service = MockEmailService()
+    mock_email = MockEmailService()
+    original = email_wiring._default_service
+    email_wiring._default_service = mock_email
 
-    # send_security_notification is a placeholder, it doesn't use email_service
-    await send_security_notification(
-        user_id=test_user.id,
-        action="username_changed",
-        metadata={"new_username": "new_alice"},
-    )
+    try:
+        await send_security_notification(
+            db_session,
+            user_id=test_user.id,
+            action="username_changed",
+            metadata={"new_username": "new_alice"},
+        )
 
-    # The placeholder doesn't send any emails
-    assert len(email_service.sent) == 0
+        # Verify an email was sent
+        assert len(mock_email.sent) == 1
+        assert mock_email.sent[0]["type"] == "raw"
+    finally:
+        email_wiring._default_service = original
 
 
 # --- XSS protection (HTML escaping) ---------------------------------------

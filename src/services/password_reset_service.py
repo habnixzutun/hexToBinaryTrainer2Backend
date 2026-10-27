@@ -131,6 +131,7 @@ async def reset_password(
     await session.commit()
 
     await send_security_notification(
+        session,
         user_id=user_id,
         action="password_reset",
     )

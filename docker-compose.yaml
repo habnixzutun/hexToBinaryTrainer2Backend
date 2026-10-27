@@ -14,6 +14,7 @@ services:
       - FRONTEND_URL=${FRONTEND_URL}
       - BASE_URL=${BASE_URL}
       - JWT_SECRET=${JWT_SECRET}
+      - EMAIL_CHANGE_KEY=${EMAIL_CHANGE_KEY}
       - SMTP_HOST=${SMTP_HOST}
       - SMTP_PORT=${SMTP_PORT}
       - SMTP_USER=${SMTP_USER}

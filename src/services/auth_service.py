@@ -192,8 +192,11 @@ async def _log_replay_detection(
     )
 
     await send_security_notification(
+        session,
         user_id=user_id,
         action="refresh_token_replay_detected",
+        ip_address=ip_address,
+        user_agent=user_agent,
     )
 
 

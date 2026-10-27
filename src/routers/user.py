@@ -158,6 +158,7 @@ async def request_email_change(
 
 @router.post("/api/auth/verify-email-change", status_code=status.HTTP_200_OK)
 async def verify_email_change(
+    request: Request,
     body: EmailChangeVerifyRequest,
     session: AsyncSession = Depends(get_db),
     email_service: EmailService = Depends(get_email_service),
@@ -215,8 +216,15 @@ async def verify_email_change(
     )
     await session.commit()
 
-    await email_service.send_security_notification_email(old_email, "email_changed")
-    await send_security_notification(user_id, "email_changed")
+    await send_security_notification(
+        session,
+        user_id=user_id,
+        action="email_changed",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+        metadata={"old_email": old_email, "new_email": new_email},
+        recipient_override=old_email,
+    )
 
     return {"message": "Email updated successfully."}
 
@@ -274,7 +282,14 @@ async def change_username(
     )
     await session.commit()
 
-    await send_security_notification(user_id, "username_changed")
+    await send_security_notification(
+        session,
+        user_id=user_id,
+        action="username_changed",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+        metadata={"new_username": body.new_username},
+    )
 
     return {"message": "Username updated successfully."}
 
@@ -335,7 +350,13 @@ async def change_password_endpoint(
     )
     await session.commit()
 
-    await send_security_notification(user_id, "password_change")
+    await send_security_notification(
+        session,
+        user_id=user_id,
+        action="password_change",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
 
     return {
         "message": "Password changed successfully. All sessions have been invalidated."

@@ -15,6 +15,15 @@ from src.services.email_service import EmailService, MockEmailService, SMTPEmail
 
 logger = logging.getLogger(__name__)
 
+# Module-level reference so non-router code (e.g. audit_service) can
+# resolve the installed service without a dependency-injection round-trip.
+_default_service: EmailService = MockEmailService()
+
+
+def get_email_service() -> EmailService:
+    """Return the application-wide EmailService (set at startup)."""
+    return _default_service
+
 
 def _unwrap_secret(value: SecretStr) -> str:
     """Return the plain string held by a SecretStr without inlining the call."""
@@ -45,7 +54,9 @@ def build_email_service(settings: Settings) -> EmailService:
 
 def install_email_service(settings: Settings) -> EmailService:
     """Build the email service and register it with the auth + user routers."""
+    global _default_service
     service = build_email_service(settings)
+    _default_service = service
 
     # Imported lazily to avoid pulling the router graph in at module load.
     from src.routers import auth, user
