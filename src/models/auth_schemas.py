@@ -11,8 +11,14 @@ class RegisterRequest(BaseModel):
 
 class RegisterResponse(BaseModel):
     message: str
-    user_id: str
+    user_id: str | None
 
 
 class VerifyEmailRequest(BaseModel):
     token: str
+
+
+class ResendVerificationRequest(BaseModel):
+    """US-08: Request body for resending verification email."""
+
+    email: EmailStr

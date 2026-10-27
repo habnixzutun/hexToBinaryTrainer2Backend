@@ -44,6 +44,12 @@ TEST_ENV_FILE = Path(__file__).resolve().parent.parent / ".env.test"
 TEST_DB_NAME_MARKER = "test"
 
 os.environ.setdefault("COOKIE_SECURE", "false")
+# US-01: engine.py calls get_settings() at import time, so JWT_SECRET must be
+# available before the import. Tests that need a specific secret clear the
+# cache and patch os.environ in their own fixtures.
+os.environ.setdefault(
+    "JWT_SECRET", "test-jwt-secret-for-pytest-only-not-for-production"
+)
 
 # Priority 2: .env.test. override=False keeps real env vars (CI) winning.
 if TEST_ENV_FILE.exists():
@@ -63,6 +69,7 @@ from src.config import get_settings  # noqa: E402
 from src.database.engine import Base  # noqa: E402
 from src.models import (  # noqa: E402, F401 - ensure models are imported
     PasswordResetToken,
+    RateLimitAttempt,
     User,
     UserAuditLog,
     UserIdentity,

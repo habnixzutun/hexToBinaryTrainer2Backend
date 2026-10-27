@@ -1,18 +1,27 @@
 """JWT token creation and decoding utilities."""
 
-import os
 from datetime import UTC, datetime, timedelta
 
 import jwt
 from uuid_utils import uuid7
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret-change-in-production")
+from src.config import get_settings
+
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_TTL_MINUTES = 15
 REFRESH_TOKEN_TTL_DAYS = 7
 VERIFICATION_TOKEN_TTL_HOURS = 24
 PASSWORD_RESET_TOKEN_TTL_HOURS = 1
 EMAIL_CHANGE_TOKEN_TTL_HOURS = 24
+
+
+def get_jwt_secret() -> str:
+    """Return the current JWT secret from Settings.
+
+    Note: Settings is cached via @lru_cache. Secret rotation requires
+    a process restart or explicit get_settings.cache_clear().
+    """
+    return get_settings().jwt_signing_key
 
 
 def create_access_token(user_id: str) -> str:
@@ -22,7 +31,7 @@ def create_access_token(user_id: str) -> str:
         "exp": datetime.now(UTC) + timedelta(minutes=ACCESS_TOKEN_TTL_MINUTES),
         "iat": datetime.now(UTC),
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
 def create_refresh_token(user_id: str) -> str:
@@ -33,7 +42,7 @@ def create_refresh_token(user_id: str) -> str:
         "exp": datetime.now(UTC) + timedelta(days=REFRESH_TOKEN_TTL_DAYS),
         "iat": datetime.now(UTC),
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
 def create_verification_token(user_id: str) -> str:
@@ -43,7 +52,7 @@ def create_verification_token(user_id: str) -> str:
         "exp": datetime.now(UTC) + timedelta(hours=VERIFICATION_TOKEN_TTL_HOURS),
         "iat": datetime.now(UTC),
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
 def create_password_reset_token(user_id: str) -> str:
@@ -53,7 +62,7 @@ def create_password_reset_token(user_id: str) -> str:
         "exp": datetime.now(UTC) + timedelta(hours=PASSWORD_RESET_TOKEN_TTL_HOURS),
         "iat": datetime.now(UTC),
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
 def create_email_change_token(user_id: str, new_email: str) -> str:
@@ -64,7 +73,7 @@ def create_email_change_token(user_id: str, new_email: str) -> str:
         "exp": datetime.now(UTC) + timedelta(hours=EMAIL_CHANGE_TOKEN_TTL_HOURS),
         "iat": datetime.now(UTC),
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
 def decode_token(token: str) -> dict:
@@ -74,4 +83,4 @@ def decode_token(token: str) -> dict:
         jwt.ExpiredSignatureError: if token is expired
         jwt.InvalidTokenError: if token is invalid
     """
-    return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    return jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])

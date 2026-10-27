@@ -1,4 +1,6 @@
+import os
 from functools import lru_cache
+from typing import Any
 
 from pydantic import SecretStr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -10,7 +12,9 @@ def _reveal(secret: SecretStr) -> str:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file="../.env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("ENV_FILE"), extra="ignore"
+    )
 
     db_name: str = "hexToBinaryTrainer2"
     db_pw: SecretStr = SecretStr("")
@@ -28,6 +32,8 @@ class Settings(BaseSettings):
     base_url: str = "http://localhost:8000"
     frontend_url: str = "http://localhost:5173"
 
+    jwt_secret: SecretStr = SecretStr("")
+
     @model_validator(mode="after")
     def _validate_smtp(self) -> "Settings":
         if self.smtp_user:
@@ -37,6 +43,46 @@ class Settings(BaseSettings):
                 raise ValueError("SMTP config incomplete: smtp_from_email is required")
         return self
 
+    @model_validator(mode="after")
+    def _validate_jwt(self) -> "Settings":
+        secret = _reveal(self.jwt_secret)
+        if not secret.strip():
+            raise ValueError("JWT_SECRET is required")
+        if secret == "dev-secret-change-in-production":
+            raise ValueError("JWT_SECRET must not be the old default value")
+        if len(secret) < 32:
+            raise ValueError("JWT_SECRET must be at least 32 characters")
+        return self
+
+    def __init__(self, **values: Any) -> None:
+        """Wrap init so pydantic ValidationErrors never carry plaintext secrets.
+
+        Pydantic v2 stores the raw field values inside ``ValidationError.errors()``
+        under the ``input`` key. For ``SecretStr`` fields those raw values are
+        still plain strings at this point -- ``SecretStr.__repr__`` only kicks
+        in when the *parsed* object is rendered. A validator failure would
+        therefore leak ``db_pw`` / ``smtp_password`` / ``jwt_secret`` through
+        ``traceback.format_exc()`` and friends. We re-write ``input`` in every
+        error dict to the masked ``SecretStr`` form before re-raising.
+        """
+        try:
+            super().__init__(**values)
+        except ValidationError as exc:
+            secret_fields = {
+                name
+                for name, field in self.__class__.model_fields.items()
+                if field.annotation is SecretStr
+            }
+            for err in exc.errors():
+                raw_input = err.get("input")
+                if isinstance(raw_input, dict):
+                    for field_name in secret_fields:
+                        if field_name in raw_input:
+                            raw_input[field_name] = SecretStr(
+                                str(raw_input[field_name])
+                            )
+            raise
+
     @property
     def async_database_url(self) -> str:
         return f"postgresql+asyncpg://{self.db_user}:{_reveal(self.db_pw)}@{self.db_host}:{self.db_port}/{self.db_name}"
@@ -44,6 +90,15 @@ class Settings(BaseSettings):
     @property
     def sync_database_url(self) -> str:
         return f"postgresql://{self.db_user}:{_reveal(self.db_pw)}@{self.db_host}:{self.db_port}/{self.db_name}"
+
+    @property
+    def jwt_signing_key(self) -> str:
+        """Public accessor for the plaintext JWT signing key.
+
+        Keeps callers (e.g. ``jwt_utils``) from reaching into the module-level
+        ``_reveal`` helper, which is an internal secret-mask utility.
+        """
+        return _reveal(self.jwt_secret)
 
 
 @lru_cache
@@ -64,9 +119,11 @@ def get_settings() -> Settings:
         return Settings()
     except ValidationError as exc:
         details = "; ".join(
-            f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}"
-            if err["loc"]
-            else err["msg"]
+            (
+                f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}"
+                if err["loc"]
+                else err["msg"]
+            )
             for err in exc.errors()
         )
         # from None: suppress the original ValidationError context so its

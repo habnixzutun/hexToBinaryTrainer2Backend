@@ -1,6 +1,7 @@
 # Auth models (US-09)
 from .auth import (
     PasswordResetToken,
+    RateLimitAttempt,
     User,
     UserAuditLog,
     UserIdentity,
@@ -16,5 +17,6 @@ __all__ = [
     "UserRefreshToken",
     "PasswordResetToken",
     "UserAuditLog",
+    "RateLimitAttempt",
     "UserStats",
 ]
