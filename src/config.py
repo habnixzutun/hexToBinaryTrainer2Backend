@@ -13,7 +13,7 @@ def _reveal(secret: SecretStr) -> str:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=os.environ.get("ENV_FILE"), extra="ignore"
+        env_file=os.environ.get("ENV_FILE", ".env"), extra="ignore"
     )
 
     db_name: str = "hexToBinaryTrainer2"
