@@ -53,7 +53,8 @@ async def check_login_lockout(ip_address: str, session: AsyncSession) -> bool:
     result = await session.execute(
         select(func.count()).where(
             RateLimitAttempt.key == key_15min,
-            RateLimitAttempt.created_at >= now - timedelta(seconds=LOCKOUT_DURATION_15MIN),
+            RateLimitAttempt.created_at
+            >= now - timedelta(seconds=LOCKOUT_DURATION_15MIN),
         )
     )
     count_15min = result.scalar() or 0
@@ -65,7 +66,8 @@ async def check_login_lockout(ip_address: str, session: AsyncSession) -> bool:
     result = await session.execute(
         select(func.count()).where(
             RateLimitAttempt.key == key_5min,
-            RateLimitAttempt.created_at >= now - timedelta(seconds=LOCKOUT_DURATION_5MIN),
+            RateLimitAttempt.created_at
+            >= now - timedelta(seconds=LOCKOUT_DURATION_5MIN),
         )
     )
     count_5min = result.scalar() or 0
@@ -77,7 +79,8 @@ async def check_login_lockout(ip_address: str, session: AsyncSession) -> bool:
     result = await session.execute(
         select(func.count()).where(
             RateLimitAttempt.key == key_1min,
-            RateLimitAttempt.created_at >= now - timedelta(seconds=LOCKOUT_DURATION_1MIN),
+            RateLimitAttempt.created_at
+            >= now - timedelta(seconds=LOCKOUT_DURATION_1MIN),
         )
     )
     count_1min = result.scalar() or 0

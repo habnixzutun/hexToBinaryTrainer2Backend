@@ -120,7 +120,10 @@ async def login(
     if not is_allowed:
         raise HTTPException(
             status_code=429,
-            detail="Too many failed login attempts. Account locked out. Try again later.",
+            detail=(
+                "Too many failed login attempts. "
+                "Account locked out. Try again later."
+            ),
         )
 
     # US-04: Check rate limit (per IP+email combination)
@@ -319,8 +322,8 @@ async def register(
         try:
             await session.commit()
         except IntegrityError:
-            # Race Condition: Ein anderer Request hat zwischen SELECT und INSERT committed
-            # → Behandle als Duplicate (silent 201)
+            # Race Condition: Anderer Request hat zwischen SELECT und INSERT
+            # committed → Behandle als Duplicate (silent 201)
             await session.rollback()
             is_duplicate = True  # Markiere als Duplicate für Response-Logik
 

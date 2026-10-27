@@ -12,7 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.services.email_templates import (
+from src.services.email_templates import (  # noqa: E402
     build_email_change_verification,
     build_password_reset_email,
     build_security_notification,

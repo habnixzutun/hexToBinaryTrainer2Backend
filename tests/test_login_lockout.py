@@ -395,7 +395,7 @@ class TestLoginLockoutIntegration:
             )
             assert response.status_code in [401, 403]
 
-        # 5th failure after reset triggers lockout (returns 401, but lockout is now active)
+        # 5th failure after reset triggers lockout (returns 401, lockout now active)
         response = await client.post(
             "/api/auth/login",
             json={"email": "reset@example.com", "password": "WrongPass1!"},
