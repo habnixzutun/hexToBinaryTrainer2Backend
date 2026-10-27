@@ -25,6 +25,11 @@ from src.services.audit_service import log_audit_action
 from src.services.email_service import EmailService, MockEmailService
 from src.services.rate_limit_service import RateLimitService
 from src.utils.jwt_utils import create_verification_token, decode_token
+from src.utils.login_lockout import (
+    check_login_lockout,
+    record_login_failure,
+    reset_login_lockout,
+)
 from src.utils.password import hash_password, validate_password_strength
 
 COOKIE_NAME = "refresh_token"
@@ -110,6 +115,15 @@ async def login(
 ) -> LoginResponse:
     client_ip = request.client.host if request.client else "unknown"
 
+    # US-05: Check adaptive login lockout (progressive lockout by IP)
+    is_allowed = await check_login_lockout(client_ip, session)
+    if not is_allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed login attempts. Account locked out. Try again later.",
+        )
+
+    # US-04: Check rate limit (per IP+email combination)
     rate_limit = RateLimitService(session)
     if not await rate_limit.check(
         f"login:{client_ip}:{body.email}",
@@ -123,11 +137,17 @@ async def login(
             session, body.email, body.password
         )
     except ValueError as exc:
+        # US-05: Record failed login attempt for adaptive lockout
+        await record_login_failure(client_ip, session)
+
         if str(exc) == "unverified":
             raise HTTPException(
                 status_code=403, detail="Account not verified."
             ) from None
         raise HTTPException(status_code=401, detail="Invalid credentials.") from None
+
+    # US-05: Successful login resets the lockout counter
+    await reset_login_lockout(client_ip, session, email=body.email)
 
     _set_refresh_cookie(response, refresh_token)
     return LoginResponse(access_token=access_token)
