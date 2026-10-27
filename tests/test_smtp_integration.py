@@ -235,6 +235,7 @@ async def test_startup_lifespan_installs_email_service(monkeypatch):
     monkeypatch.setattr(main_module, "create_migrations_table", _noop)
     monkeypatch.setattr(main_module, "run_v001", _noop)
     monkeypatch.setattr(main_module, "run_v002", _noop)
+    monkeypatch.setattr(main_module, "run_v003", _noop)
 
     async with main_module.lifespan(main_module.app):
         pass

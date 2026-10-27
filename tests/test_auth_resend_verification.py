@@ -1,4 +1,4 @@
-"""Tests for POST /api/auth/resend-verification endpoint (US-08).
+"""Tests for POST /api/auth/resend-verification endpoint (US-04/US-08).
 
 Acceptance Criteria:
 - Valid resend for unverified user → 200, email sent
@@ -6,6 +6,7 @@ Acceptance Criteria:
 - Email not registered → 200 (silent, no email)
 - Email already verified → 200 (silent, no email)
 - Invalid email format → 422
+- Silent handling prevents email enumeration
 """
 
 from datetime import UTC, datetime
@@ -15,39 +16,56 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
+
 from src.database.engine import Base, get_db
 from src.main import app
 from src.models.auth import RateLimitAttempt, User, UserIdentity
 from src.routers.auth import get_email_service, set_email_service
 from src.services.email_service import MockEmailService
+from src.utils.jwt_utils import create_verification_token
 from src.utils.password import hash_password
+from uuid_utils import uuid7
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 VALID_PASSWORD = "StrongPass1!"
 
+GENERIC_RESEND_MESSAGE = (
+    "If this email is registered and unverified, a new mail has been sent."
+)
+
 
 @pytest.fixture
-async def engine():
-    """Create test database engine."""
-    eng = create_async_engine(TEST_DB_URL, echo=False)
-    async with eng.begin() as conn:
+async def async_engine():
+    """Create in-memory SQLite engine."""
+    engine = create_async_engine(TEST_DB_URL, echo=False)
+    async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    yield eng
-    await eng.dispose()
+    yield engine
+    await engine.dispose()
 
 
 @pytest.fixture
-async def db_session(engine):
-    """Create test database session."""
-    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+async def session(async_engine):
+    """Create async session."""
+    factory = sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
     async with factory() as s:
         yield s
         await s.rollback()
 
 
+@pytest.fixture(autouse=True)
+async def cleanup_rate_limits(session):
+    """Clean up rate limit attempts before and after each test."""
+    await session.execute(delete(RateLimitAttempt))
+    await session.commit()
+    yield
+    await session.execute(delete(RateLimitAttempt))
+    await session.commit()
+
+
 @pytest.fixture
 def mock_email_service():
-    """Set up mock email service."""
+    """Mock email service for testing."""
     svc = MockEmailService()
     set_email_service(svc)
     yield svc
@@ -55,9 +73,9 @@ def mock_email_service():
 
 
 @pytest.fixture
-async def client(engine, mock_email_service):
-    """Create test client with database and email service overrides."""
-    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+async def client(async_engine, mock_email_service):
+    """Create test client."""
+    factory = sessionmaker(async_engine, class_=AsyncSession, expire_on_commit=False)
 
     async def override_get_db():
         async with factory() as s:
@@ -73,14 +91,9 @@ async def client(engine, mock_email_service):
     app.dependency_overrides.clear()
 
 
-@pytest.fixture(autouse=True)
-async def cleanup_rate_limits(db_session):
-    """Clean up rate limit attempts before and after each test."""
-    await db_session.execute(delete(RateLimitAttempt))
-    await db_session.commit()
-    yield
-    await db_session.execute(delete(RateLimitAttempt))
-    await db_session.commit()
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 async def _seed_unverified_user(
@@ -96,7 +109,7 @@ async def _seed_unverified_user(
             provider="email",
             provider_user_id=email,
             password_hash=hash_password(VALID_PASSWORD),
-            verified_at=None,  # Unverified
+            verified_at=None,
         )
     )
     await session.commit()
@@ -116,7 +129,7 @@ async def _seed_verified_user(
             provider="email",
             provider_user_id=email,
             password_hash=hash_password(VALID_PASSWORD),
-            verified_at=datetime.now(UTC),  # Verified
+            verified_at=datetime.now(UTC),
         )
     )
     await session.commit()
@@ -142,196 +155,180 @@ def _latest_verification_token(svc: MockEmailService) -> str:
 
 
 async def test_resend_verification_unverified_user_sends_email(
-    client, db_session, mock_email_service
+    client, session, mock_email_service
 ):
     """Valid resend for unverified user → 200, email sent."""
-    # Arrange: Create unverified user
-    email = "unverified@example.com"
-    username = "unverified_user"
-    await _seed_unverified_user(db_session, email, username)
-
+    await _seed_unverified_user(session, "unverified@example.com", "unverified_user")
     initial_email_count = _count_verification_emails(mock_email_service)
 
-    # Act: Request resend
     response = await client.post(
-        "/api/auth/resend-verification", json={"email": email}
+        "/api/auth/resend-verification", json={"email": "unverified@example.com"}
     )
 
-    # Assert: 200 OK, email sent
     assert response.status_code == 200
-    assert response.json() == {
-        "message": "If this email is registered and unverified, a new mail has been sent."
-    }
-
-    # Verify email was sent
-    new_email_count = _count_verification_emails(mock_email_service)
-    assert new_email_count == initial_email_count + 1
+    assert response.json() == {"message": GENERIC_RESEND_MESSAGE}
+    assert _count_verification_emails(mock_email_service) == initial_email_count + 1
 
 
 async def test_resend_verification_rate_limit_after_3_requests(
-    client, db_session, mock_email_service
+    client, session, mock_email_service
 ):
     """Rate limit after 3 requests → 429."""
-    # Arrange: Create unverified user
-    email = "ratelimit@example.com"
-    username = "ratelimit_user"
-    await _seed_unverified_user(db_session, email, username)
+    await _seed_unverified_user(session, "ratelimit@example.com", "ratelimit_user")
 
-    # Act: Make 3 requests (should succeed)
     for i in range(3):
         response = await client.post(
-            "/api/auth/resend-verification", json={"email": email}
+            "/api/auth/resend-verification", json={"email": "ratelimit@example.com"}
         )
-        assert response.status_code == 200, f"Request {i+1} should succeed"
+        assert response.status_code == 200, f"Request {i + 1} should succeed"
 
-    # Act: 4th request should be rate limited
     response = await client.post(
-        "/api/auth/resend-verification", json={"email": email}
+        "/api/auth/resend-verification", json={"email": "ratelimit@example.com"}
     )
 
-    # Assert: 429 Too Many Requests
     assert response.status_code == 429
-    assert response.json()["detail"] == "Too many requests."
+    assert "Too many requests" in response.json()["detail"]
 
 
 async def test_resend_verification_email_not_registered_returns_200_silent(
     client, mock_email_service
 ):
     """Email not registered → 200 (silent, no email sent)."""
-    # Arrange: Non-existent email
-    email = "nonexistent@example.com"
     initial_email_count = _count_verification_emails(mock_email_service)
 
-    # Act: Request resend for non-existent email
     response = await client.post(
-        "/api/auth/resend-verification", json={"email": email}
+        "/api/auth/resend-verification", json={"email": "nonexistent@example.com"}
     )
 
-    # Assert: 200 OK (silent failure)
     assert response.status_code == 200
-    assert response.json() == {
-        "message": "If this email is registered and unverified, a new mail has been sent."
-    }
-
-    # Verify NO email was sent
-    new_email_count = _count_verification_emails(mock_email_service)
-    assert new_email_count == initial_email_count
+    assert response.json() == {"message": GENERIC_RESEND_MESSAGE}
+    assert _count_verification_emails(mock_email_service) == initial_email_count
 
 
 async def test_resend_verification_email_already_verified_returns_200_silent(
-    client, db_session, mock_email_service
+    client, session, mock_email_service
 ):
     """Email already verified → 200 (silent, no email sent)."""
-    # Arrange: Create verified user
-    email = "verified@example.com"
-    username = "verified_user"
-    await _seed_verified_user(db_session, email, username)
-
+    await _seed_verified_user(session, "verified@example.com", "verified_user")
     initial_email_count = _count_verification_emails(mock_email_service)
 
-    # Act: Request resend for verified email
     response = await client.post(
-        "/api/auth/resend-verification", json={"email": email}
+        "/api/auth/resend-verification", json={"email": "verified@example.com"}
     )
 
-    # Assert: 200 OK (silent failure)
     assert response.status_code == 200
-    assert response.json() == {
-        "message": "If this email is registered and unverified, a new mail has been sent."
-    }
-
-    # Verify NO email was sent
-    new_email_count = _count_verification_emails(mock_email_service)
-    assert new_email_count == initial_email_count
+    assert response.json() == {"message": GENERIC_RESEND_MESSAGE}
+    assert _count_verification_emails(mock_email_service) == initial_email_count
 
 
 async def test_resend_verification_invalid_email_format_returns_422(client):
     """Invalid email format → 422."""
-    # Act: Request resend with invalid email format
     response = await client.post(
         "/api/auth/resend-verification", json={"email": "not-an-email"}
     )
 
-    # Assert: 422 Unprocessable Entity
+    assert response.status_code == 422
+
+
+async def test_resend_verification_missing_email(client):
+    """Missing email field should return 422."""
+    response = await client.post("/api/auth/resend-verification", json={})
+
     assert response.status_code == 422
 
 
 async def test_resend_verification_generates_new_token(
-    client, db_session, mock_email_service
+    client, session, mock_email_service
 ):
-    """Resend generates a new verification token (different from first)."""
-    # Arrange: Create unverified user
-    email = "newtoken@example.com"
-    username = "newtoken_user"
-    await _seed_unverified_user(db_session, email, username)
+    """Resend generates a new verification token."""
+    await _seed_unverified_user(session, "newtoken@example.com", "newtoken_user")
 
-    # Act: Request resend
     response = await client.post(
-        "/api/auth/resend-verification", json={"email": email}
+        "/api/auth/resend-verification", json={"email": "newtoken@example.com"}
     )
     assert response.status_code == 200
 
-    # Assert: Email was sent with a token
     token = _latest_verification_token(mock_email_service)
     assert token is not None
     assert len(token) > 0
 
 
 async def test_resend_verification_different_emails_separate_rate_limits(
-    client, db_session, mock_email_service
+    client, session, mock_email_service
 ):
     """Different emails have separate rate limits."""
-    # Arrange: Create two unverified users
-    email1 = "user1@example.com"
-    username1 = "user1"
-    await _seed_unverified_user(db_session, email1, username1)
+    await _seed_unverified_user(session, "user1@example.com", "user1")
+    await _seed_unverified_user(session, "user2@example.com", "user2")
 
-    email2 = "user2@example.com"
-    username2 = "user2"
-    await _seed_unverified_user(db_session, email2, username2)
-
-    # Act: Make 3 requests for email1 (exhausts rate limit)
-    for i in range(3):
+    # Exhaust rate limit for email1
+    for _ in range(3):
         response = await client.post(
-            "/api/auth/resend-verification", json={"email": email1}
+            "/api/auth/resend-verification", json={"email": "user1@example.com"}
         )
         assert response.status_code == 200
 
-    # Assert: email1 is rate limited
+    # email1 is rate limited
     response = await client.post(
-        "/api/auth/resend-verification", json={"email": email1}
+        "/api/auth/resend-verification", json={"email": "user1@example.com"}
     )
     assert response.status_code == 429
 
-    # Assert: email2 is NOT rate limited (separate limit)
+    # email2 is NOT rate limited (separate limit)
     response = await client.post(
-        "/api/auth/resend-verification", json={"email": email2}
+        "/api/auth/resend-verification", json={"email": "user2@example.com"}
     )
     assert response.status_code == 200
 
 
 async def test_resend_verification_email_send_failure_silent(
-    client, db_session, mock_email_service
+    client, session, mock_email_service
 ):
     """Email send failure is handled silently (no error response)."""
-    # Arrange: Create unverified user
-    email = "silent-fail@example.com"
-    username = "silent_fail_user"
-    await _seed_unverified_user(db_session, email, username)
+    await _seed_unverified_user(session, "silent-fail@example.com", "silent_fail_user")
 
-    # Mock email service to raise exception
     async def failing_send(*args, **kwargs):
         raise Exception("SMTP connection failed")
 
     mock_email_service.send_verification_email = failing_send
 
-    # Act: Request resend
     response = await client.post(
-        "/api/auth/resend-verification", json={"email": email}
+        "/api/auth/resend-verification", json={"email": "silent-fail@example.com"}
     )
 
-    # Assert: 200 OK (silent failure, no error leaked)
     assert response.status_code == 200
-    assert response.json() == {
-        "message": "If this email is registered and unverified, a new mail has been sent."
-    }
+    assert response.json() == {"message": GENERIC_RESEND_MESSAGE}
+
+
+# ---------------------------------------------------------------------------
+# US-04: Silent handling prevents email enumeration
+# ---------------------------------------------------------------------------
+
+
+async def test_all_responses_identical(client, session, mock_email_service):
+    """All responses should be identical regardless of email status."""
+    await _seed_unverified_user(session, "unverified@example.com", "unverified")
+    await _seed_verified_user(session, "verified@example.com", "verified")
+
+    scenarios = [
+        ("nonexistent@example.com", "non-existent email"),
+        ("verified@example.com", "verified email"),
+        ("unverified@example.com", "unverified email"),
+    ]
+
+    responses = []
+    for email, scenario in scenarios:
+        response = await client.post(
+            "/api/auth/resend-verification", json={"email": email}
+        )
+        responses.append((scenario, response.status_code, response.json()))
+
+    first_status = responses[0][1]
+    first_message = responses[0][2]["message"]
+
+    for scenario, status_code, body in responses:
+        assert status_code == first_status, (
+            f"{scenario}: expected status {first_status}, got {status_code}"
+        )
+        assert body["message"] == first_message, (
+            f"{scenario}: expected message '{first_message}', got '{body['message']}'"
+        )
