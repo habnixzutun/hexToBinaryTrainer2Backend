@@ -72,11 +72,13 @@ def test_build_context_normalizes_none_values():
         timestamp=None,
         ip_address=None,
         user_agent=None,
+        location=None,
     )
     assert ctx.username == "unknown"
     assert ctx.ip_address == "unknown"
     assert ctx.user_agent == "unknown"
     assert ctx.timestamp == "unknown"
+    assert ctx.location == "unknown"
 
 
 def test_build_context_preserves_datetime():
@@ -119,12 +121,15 @@ def test_render_password_reset_contains_required_elements():
         timestamp="2024-01-15 10:30:00 UTC",
         ip_address="1.2.3.4",
         user_agent="Mozilla/5.0",
+        location="Berlin, Germany",
     )
     html = render_password_reset(ctx)
     assert "alice" in html
     assert "2024-01-15 10:30:00 UTC" in html
     assert "1.2.3.4" in html
     assert "Mozilla/5.0" in html
+    assert "Berlin, Germany" in html
+    assert "Location" in html
     assert "Password Reset" in html
     assert "If this wasn't you" in html
 
@@ -196,6 +201,7 @@ def test_all_known_actions_have_subjects():
             timestamp="now",
             ip_address="unknown",
             user_agent="unknown",
+            location="unknown",
             action=action,
             extra={},
         )
@@ -609,3 +615,85 @@ async def test_rate_limit_is_per_user(db_session, test_user):
         action="password_reset",
     )
     assert len(email_service.sent) == 11
+
+
+# --- Location & User-Agent parsing -------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_notification_includes_location_in_email(db_session, test_user):
+    """Security notification email contains the resolved location."""
+    from src.services.geolocation_service import NullGeolocationService
+
+    class FakeGeoService:
+        """Returns a fixed location for any IP."""
+
+        async def lookup(self, ip_address):
+            return "Berlin, Germany"
+
+    email_service = MockEmailService()
+    service = SecurityNotificationService(
+        email_service, db_session, geolocation_service=FakeGeoService()
+    )
+
+    await service.send(
+        user_id=test_user.id,
+        action="password_reset",
+        ip_address="8.8.8.8",
+    )
+
+    assert len(email_service.sent) == 1
+    html = email_service.sent[0]["html_body"]
+    assert "Berlin, Germany" in html
+    assert "Location" in html
+
+
+@pytest.mark.asyncio
+async def test_notification_parses_user_agent(db_session, test_user):
+    """Raw User-Agent is parsed into human-readable form in the email."""
+    from src.services.geolocation_service import NullGeolocationService
+
+    email_service = MockEmailService()
+    service = SecurityNotificationService(
+        email_service, db_session, geolocation_service=NullGeolocationService()
+    )
+
+    chrome_ua = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+    await service.send(
+        user_id=test_user.id,
+        action="password_reset",
+        ip_address="127.0.0.1",
+        user_agent=chrome_ua,
+    )
+
+    assert len(email_service.sent) == 1
+    html = email_service.sent[0]["html_body"]
+    # The raw Mozilla/5.0... should NOT appear verbatim
+    assert "AppleWebKit/537.36" not in html
+    # The parsed form should appear
+    assert "Chrome" in html
+    assert "Mac" in html
+
+
+@pytest.mark.asyncio
+async def test_notification_shows_unknown_for_missing_ip(db_session, test_user):
+    """When no IP is provided, location shows 'unknown'."""
+    from src.services.geolocation_service import NullGeolocationService
+
+    email_service = MockEmailService()
+    service = SecurityNotificationService(
+        email_service, db_session, geolocation_service=NullGeolocationService()
+    )
+
+    await service.send(
+        user_id=test_user.id,
+        action="password_reset",
+    )
+
+    assert len(email_service.sent) == 1
+    html = email_service.sent[0]["html_body"]
+    # "unknown" should appear for location
+    assert ">unknown<" in html.lower() or "unknown" in html.lower()

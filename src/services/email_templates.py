@@ -100,6 +100,11 @@ font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
                       {ip_address}</p>
 
                     <p style="margin:0 0 8px;font-size:13px;color:#6b7280;">
+                      Location</p>
+                    <p style="margin:0 0 16px;font-size:14px;color:#111827;">
+                      {location}</p>
+
+                    <p style="margin:0 0 8px;font-size:13px;color:#6b7280;">
                       Browser / Device</p>
                     <p style="margin:0;font-size:14px;color:#111827;
                               word-break:break-word;">{user_agent}</p>
@@ -140,6 +145,7 @@ class NotificationContext:
     timestamp: str
     ip_address: str
     user_agent: str
+    location: str
     action: str
     extra: dict[str, str]
 
@@ -197,6 +203,7 @@ def render_password_reset(ctx: NotificationContext) -> str:
         action_label=_ACTION_LABEL["password_reset"],
         timestamp=ctx.timestamp,
         ip_address=ctx.ip_address,
+        location=ctx.location,
         user_agent=ctx.user_agent,
     )
 
@@ -217,6 +224,7 @@ def render_replay_detected(ctx: NotificationContext) -> str:
         action_label=_ACTION_LABEL["refresh_token_replay_detected"],
         timestamp=ctx.timestamp,
         ip_address=ctx.ip_address,
+        location=ctx.location,
         user_agent=ctx.user_agent,
     )
 
@@ -245,6 +253,7 @@ def render_email_changed(ctx: NotificationContext) -> str:
         action_label=_ACTION_LABEL["email_changed"],
         timestamp=ctx.timestamp,
         ip_address=ctx.ip_address,
+        location=ctx.location,
         user_agent=ctx.user_agent,
     )
 
@@ -264,6 +273,7 @@ def render_username_changed(ctx: NotificationContext) -> str:
         action_label=_ACTION_LABEL["username_changed"],
         timestamp=ctx.timestamp,
         ip_address=ctx.ip_address,
+        location=ctx.location,
         user_agent=ctx.user_agent,
     )
 
@@ -283,6 +293,7 @@ def render_password_change(ctx: NotificationContext) -> str:
         action_label=_ACTION_LABEL["password_change"],
         timestamp=ctx.timestamp,
         ip_address=ctx.ip_address,
+        location=ctx.location,
         user_agent=ctx.user_agent,
     )
 
@@ -324,6 +335,7 @@ def render_security_notification(
             action_label=label,
             timestamp=ctx.timestamp,
             ip_address=ctx.ip_address,
+            location=ctx.location,
             user_agent=ctx.user_agent,
         )
         return subject, html_body
@@ -338,6 +350,7 @@ def build_context(
     timestamp: datetime | str | None = None,
     ip_address: str | None = None,
     user_agent: str | None = None,
+    location: str | None = None,
     extra: dict[str, str] | None = None,
 ) -> NotificationContext:
     """Convenience constructor that normalizes optional fields."""
@@ -346,6 +359,7 @@ def build_context(
         timestamp=_format_timestamp(timestamp),
         ip_address=_sanitize(ip_address),
         user_agent=_sanitize(user_agent),
+        location=_sanitize(location),
         action=action,
         extra=dict(extra) if extra else {},
     )
