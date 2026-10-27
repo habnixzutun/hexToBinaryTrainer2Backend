@@ -1,27 +1,48 @@
 # HexToBinaryTrainer2 Backend
 
-FastAPI backend for a hex-to-binary training application with comprehensive user authentication, email verification, and secure session management.
+FastAPI backend for a hex-to-binary training application with comprehensive user
+authentication, email verification and a hardened session lifecycle (rotating
+refresh tokens, replay detection, persistent rate limiting, adaptive lockout,
+audit log and security alert emails).
 
 ## Features
+
+### Security Hardening (Sprint 3)
+Defense-in-depth layered on top of the authentication system. Details in [Security Features](#security-features):
+- **Refresh Token Rotation** — every `/api/auth/refresh` issues a fresh token and revokes the one presented
+- **Replay Detection** — presenting an already-rotated token revokes **all** sessions of the account and writes an audit event (the user alert for it is prepared but not mailed yet, see [Security Notifications](#security-notifications-us-09))
+- **Logout-All** — `POST /api/auth/logout-all` terminates every active session (suspected compromise)
+- **Anti-Enumeration** — registration and resend-verification always return the same generic answer; the password is hashed even for a duplicate so both paths take the same time
+- **Persistent Rate Limiting** — counters live in the Postgres table `rate_limit_attempt`, so limits survive restarts and are shared across workers
+- **Adaptive Login Lockout** — progressive per-IP lockout (1 min → 5 min → 15 min) instead of a fixed hard wall
+- **Encrypted Email-Change Tokens** — the new address is sealed in a Fernet envelope instead of a plaintext JWT claim
+- **Security Notifications** — self-contained HTML alert templates for sensitive
+  account changes (XSS-escaped, rate-limited; delivery hooked up for email
+  changes, the remaining actions still need the transport wiring)
+- **Mandatory JWT Secret** — `JWT_SECRET` is required (≥ 32 chars); the app refuses to start instead of falling back to a default
 
 ### Authentication System (Sprint 2)
 - **User Registration** with email verification
 - **Login/Logout** with JWT access tokens and secure refresh token cookies
-- **Token Refresh** for seamless session continuation
+- **Token Refresh** for seamless session continuation — rotated on every call
+  since Sprint 3 (single-use refresh tokens)
 - **Password Reset** via email with secure one-time tokens
 - **Password Change** for authenticated users (invalidates all sessions)
 - **Email Change** with verification and audit logging
 - **Username Change** with 7-day cooldown limit
 - **Audit Logging** for all critical security actions
-- **Security Notifications** via email for sensitive operations
+- **Security Notifications** via email for sensitive operations (templates ready,
+  delivery partially wired — see [Security Notifications](#security-notifications-us-09))
 - **Multi-Provider Ready** schema (prepared for OAuth integration)
-- **Rate Limiting** on authentication endpoints
+- **Rate Limiting** on authentication endpoints — persistent (DB-backed) since
+  Sprint 3
 
 ### Core Features (Sprint 1)
 - **Answer Tracking**: Track correct/incorrect answers with point calculations
   - Correct answer: +bits points
   - Incorrect answer: -4×bits points
-- **Leaderboard**: Top 10 users sorted by points (DESC), then incorrect count (ASC)
+- **Leaderboard**: Top N users sorted by points (DESC), `limit` query parameter
+  defaults to 50 (no secondary sort — tied scores keep an arbitrary order)
 
 ## Tech Stack
 
@@ -38,6 +59,21 @@ FastAPI backend for a hex-to-binary training application with comprehensive user
 ## Architecture
 
 For detailed architecture documentation, see [docs/architecture.md](docs/architecture.md).
+(Module layout and the auth data model are described there; note that the file still
+carries the Sprint-1 community view.)
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | Module/community structure, resolved code gaps, architecture decisions |
+| [docs/adr/001-auth-hardening.md](docs/adr/001-auth-hardening.md) | Sprint 3 threat analysis + decisions DEC-01 … DEC-05 (DB rate limit, aggressive replay revocation, IP backoff, Fernet, cookie handling) |
+| [docs/auth-hardening-plan.md](docs/auth-hardening-plan.md) | Security-hardening backlog (US-01 … US-12) with acceptance criteria |
+| [docs/auth-hardening-test-plan.md](docs/auth-hardening-test-plan.md) | Adversarial test matrix per hardening story |
+| [docs/sprint2-plan.md](docs/sprint2-plan.md) / [docs/sprint3-plan.md](docs/sprint3-plan.md) / [docs/sprint3-review.md](docs/sprint3-review.md) | Auth-system plan, production-readiness plan and its review (157 tests / 96,72 % at the time) |
+| [docs/test-setup.md](docs/test-setup.md) | PostgreSQL test instance, `.env.test`, CI service container |
+| [docs/backlog.md](docs/backlog.md) | Sprint-1 consolidation backlog (historical) |
+| `http://localhost:8000/docs` | Live OpenAPI / Swagger UI — the authoritative reference for request/response schemas |
 
 ## Setup
 
@@ -78,9 +114,15 @@ DB_PW=your_password
 DB_HOST=localhost
 DB_PORT=5432
 
-# JWT Configuration (REQUIRED)
+# JWT Configuration (REQUIRED — startup fails without it)
 # Generate a strong secret: python -c "import secrets; print(secrets.token_urlsafe(32))"
 JWT_SECRET=your-strong-jwt-secret-here
+
+# Email-Change Token Key (REQUIRED in production, ≥ 32 chars)
+# Encrypts the new email address inside the verification token (Sprint 3 / US-07).
+# The built-in default is only safe for the test suite.
+# Generate one: python -c "import secrets; print(secrets.token_urlsafe(32))"
+EMAIL_CHANGE_KEY=your-email-change-key-here
 
 # SMTP Configuration (REQUIRED for email notifications)
 SMTP_HOST=smtp.strato.de
@@ -91,15 +133,31 @@ SMTP_FROM_EMAIL=noreply@your-domain.de
 
 # API Configuration
 ALLOWED_ORIGINS=["http://localhost:5173"]
+BASE_URL=http://localhost:8000
+FRONTEND_URL=http://localhost:5173
 
 # Optional: Cookie security (set to false for local development without HTTPS)
 COOKIE_SECURE=true
 ```
 
 **Important:**
-- Generate a strong `JWT_SECRET` (at least 32 bytes)
-- Configure SMTP credentials for email verification and security notifications
+- `JWT_SECRET` is mandatory: empty, shorter than 32 characters, or the old
+  default `dev-secret-change-in-production` aborts startup with a `ValueError`
+  that never prints the secret itself
+- `EMAIL_CHANGE_KEY` must be set to a value of ≥ 32 characters in production;
+  rotating it invalidates every outstanding email-change token.
+  **⚠️ `docker-compose.yaml` does not forward this variable to the `api` container
+  yet** — until it does, a composed deployment runs on the hard-coded test-suite
+  default key and every email-change token is decryptable by anyone with repository
+  access. Add `EMAIL_CHANGE_KEY=${EMAIL_CHANGE_KEY}` to the `environment:` list
+  (tracked as a follow-up in the roadmap)
+- Configure SMTP credentials for email verification, password reset and security notifications;
+  without them the app falls back to `MockEmailService` (development only)
+- `BASE_URL` is used for the links inside verification/reset emails, `FRONTEND_URL`
+  is where the HTML verification page redirects afterwards
 - Set `COOKIE_SECURE=false` for local development without HTTPS
+- All secret fields (`DB_PW`, `SMTP_PASSWORD`, `JWT_SECRET`, `EMAIL_CHANGE_KEY`) are
+  `SecretStr`s — they are masked in logs and in validation error messages
 
 ## Running the Application
 
@@ -137,16 +195,34 @@ Register a new user account.
 **Response:** `201 Created`
 ```json
 {
-  "message": "Registration successful. Please check your email to verify your account.",
-  "user_id": "01234567-89ab-cdef-0123-456789abcdef"
+  "message": "If this email is available, a verification mail has been sent.",
+  "user_id": null
 }
 ```
 
+**Anti-Enumeration (US-03):** the answer is always identical — a duplicate
+email or username returns the same `201` with the same message instead of a
+`409`, and `user_id` is always `null`. Internally the password is hashed and the
+verification token is created on **every** call, so the duplicate path and the
+fresh path take the same time (bcrypt ≈ 190 ms dominates both). A race on the
+unique constraints (`IntegrityError`) is handled as a duplicate too.
+
 **Password Requirements:**
-- Minimum 8 characters
-- Maximum 128 characters
-- At least 1 uppercase letter
-- At least 1 digit
+- 8 – 128 characters
+- at least one uppercase letter, one lowercase letter, one digit **and** one special character
+
+Weak passwords are the one case that still answers `400` with the concrete
+reason, because the caller has to know which rule broke:
+```json
+{
+  "detail": {
+    "errors": [
+      "Password must contain at least one digit.",
+      "Password must contain at least one special character."
+    ]
+  }
+}
+```
 
 **Rate Limiting:** 3 registrations per hour per IP address + email combination
 (`429 Too Many Requests` when exceeded). Persisted in the `rate_limit_attempt`
@@ -168,9 +244,16 @@ Verify email address with token from registration email.
 **Response:** `200 OK`
 ```json
 {
-  "message": "Email verified successfully. You can now log in."
+  "message": "Email verified successfully."
 }
 ```
+Already-verified accounts get `{"message": "Email already verified."}` — the call is idempotent.
+
+**Errors:** `400` for an expired token, a wrong token type or an unknown identity.
+
+> The same flow is available as a browser link: `GET /verify-email?token=…` renders an
+> HTML result page and redirects to `FRONTEND_URL` on success. That is what the
+> verification emails point at.
 
 ---
 
@@ -198,6 +281,10 @@ is unknown, so the endpoint cannot be used for email enumeration.
 (`429 Too Many Requests` when exceeded). Every request for a known address is
 recorded as the `verification_resend_requested` audit event.
 
+**Delivery failures are silent:** if the SMTP send throws, the error is swallowed
+and the caller still gets the standard `200` message — the response must never
+reveal whether a mail actually left the server.
+
 ---
 
 #### Login & Session Management
@@ -222,17 +309,26 @@ Authenticate user and receive access token + refresh cookie.
 }
 ```
 
-**Headers:** `Set-Cookie: refresh_token=<token>; HttpOnly; Secure; SameSite=Strict; Path=/api/auth/refresh`
+**Headers:** `Set-Cookie: refresh_token=<token>; HttpOnly; Secure; SameSite=Strict`
+
+**Errors:** `401 Invalid credentials.` for a wrong password **and** for an
+unknown email (identical answer, no account existence leak), `403 Account not
+verified.` for an unverified account, `429` when rate-limited or locked out.
 
 **Rate Limiting:** 5 login attempts per minute per IP address + email
 combination (`429 Too Many Requests` when exceeded), backed by the persistent
 `rate_limit_attempt` table
 
+**Adaptive Lockout (US-05):** on top of the per-request limit, failed logins are
+counted per IP address with progressively longer blocks — 1 minute after 5
+failures, 5 minutes after 10, 15 minutes after 20. A successful login resets the
+counter. `429` is returned while locked out.
+
 ---
 
 **POST /api/auth/refresh**
 
-Refresh access token using refresh cookie.
+Rotate the refresh token and return a fresh access token.
 
 **Request:** Cookie `refresh_token=<token>` (sent automatically)
 
@@ -244,20 +340,74 @@ Refresh access token using refresh cookie.
 }
 ```
 
+**Headers:** `Set-Cookie: refresh_token=<new token>; HttpOnly; Secure; SameSite=Strict`
+
+**Rotation (US-02):** every call revokes the presented token and sets a new one,
+so a refresh token is single-use. The client must accept the new cookie — with
+`credentials: "include"` / `curl -b cookies.txt -c cookies.txt` this happens
+automatically.
+
+**Replay Detection (US-02, ADR 001 DEC-02):** presenting a token that was
+already rotated (or otherwise revoked) is treated as theft. **All** refresh
+tokens of the user are revoked, the audit event `refresh_token_replay_detected`
+is written (with IP and user agent) and a security notification is dispatched
+for the user (see [Security Notifications](#security-notifications-us-09) — the
+email leg of that dispatch is not wired to the transport yet). The caller
+receives:
+```json
+{
+  "detail": "Security violation detected. All sessions have been revoked."
+}
+```
+with status `401` (the router also clears the dead refresh cookie). Clients should
+drop the cookie on *any* `401` from this endpoint and send the user to the login
+page. Other failure modes answer `401 Invalid or expired refresh token.`
+
 ---
 
 **POST /api/auth/logout**
 
-Logout and revoke refresh token.
+Logout and revoke the presented refresh token.
 
 **Request:** Cookie `refresh_token=<token>` (sent automatically)
 
 **Response:** `200 OK`
 ```json
 {
-  "message": "Logged out successfully"
+  "message": "Logged out."
 }
 ```
+
+Idempotent: an unknown, expired or already-revoked token still answers `200`.
+
+---
+
+**POST /api/auth/logout-all**
+
+Revoke **all** active refresh tokens of the authenticated user (US-06) — the
+kill-switch for a suspected account compromise. Every device has to
+re-authenticate afterwards.
+
+**Headers:** `Authorization: Bearer <access_token>`
+
+**Response:** `200 OK`
+```json
+{
+  "message": "All sessions revoked.",
+  "count": 3
+}
+```
+
+- `count` is the number of tokens revoked by this call. The endpoint is
+  idempotent: a second call returns `count: 0` and writes no second audit entry.
+- Audit event: `all_sessions_revoked` with `ip`, `user_agent` and
+  `metadata.session_count`.
+- Expired-but-not-yet-revoked tokens are counted too, so `count` matches the
+  sessions the user actually had.
+- **Scope:** only refresh tokens are revoked. The presented access token stays
+  valid for up to 15 minutes (its TTL) — this is the accepted residual risk in
+  ADR 001.
+- Missing/invalid Bearer header → `401 Missing or invalid Authorization header.`
 
 ---
 
@@ -277,11 +427,19 @@ Request password reset email.
 **Response:** `200 OK`
 ```json
 {
-  "message": "If the email exists, a reset link has been sent."
+  "message": "If this email is registered, a reset link has been sent."
 }
 ```
 
-**Security:** Always returns 200, even if email doesn't exist (prevents email enumeration)
+**Security:** Always returns 200, even if the email doesn't exist (prevents email
+enumeration). The mail contains a link to `{BASE_URL}/reset-password?token=…`;
+the token is valid for **1 hour**, is stored only as a SHA-256 hash and is
+single-use.
+
+> **Note:** unlike `GET /verify-email`, the backend does **not** serve a
+> `/reset-password` page — that path has to be provided by the frontend, and
+> `BASE_URL` must point to wherever the page is reachable. The backend only owns
+> the `POST /api/auth/reset-password` confirmation below.
 
 ---
 
@@ -300,14 +458,47 @@ Reset password with token from reset email.
 **Response:** `200 OK`
 ```json
 {
-  "message": "Password reset successfully. All sessions have been invalidated."
+  "message": "Password reset successful."
 }
 ```
 
+**Errors:** `400 Reset token has expired.`, `400 Reset token has already been
+used.` or `400 Invalid reset token.` (also for a token of the wrong type), plus
+`400` with the strength `errors` list if the new password is too weak.
+
 **Security:**
-- All active sessions are invalidated
-- Audit log entry created
-- Security notification email sent
+- All active refresh tokens are invalidated → every device must log in again
+- The token is marked as used (`used_at`), so it cannot be replayed
+- Audit log entry `password_reset`
+- Security notification dispatched (see [Security Notifications](#security-notifications-us-09))
+
+---
+
+#### Current User
+
+**GET /api/user/me**
+
+Profile plus game statistics of the authenticated user. Statistics are `0` until
+the first answer is submitted (the `user_stats` row is created lazily).
+
+**Headers:** `Authorization: Bearer <access_token>`
+
+**Response:** `200 OK`
+```json
+{
+  "id": "01234567-89ab-cdef-0123-456789abcdef",
+  "username": "username",
+  "email": "user@example.com",
+  "correct_count": 13,
+  "incorrect_count": 1,
+  "points": 36
+}
+```
+
+(Example above: 13 correct answers at `bits=4` → +52, one incorrect → −16 = 36 points.)
+
+**Errors:** `401` for a missing/invalid/expired token, `401 User not found.` if
+the token no longer belongs to an existing user.
 
 ---
 
@@ -329,9 +520,16 @@ Request email change (requires authentication).
 **Response:** `200 OK`
 ```json
 {
-  "message": "Verification email sent to new address"
+  "message": "Verification email sent to new address."
 }
 ```
+
+**Errors:** `409 Email already registered.` if the address already belongs to a
+user, `422` for an invalid address format.
+
+**Security:** audit event `email_change_requested` (with the target address in
+metadata) before the mail goes out; the confirmation token is Fernet-encrypted
+(see below).
 
 ---
 
@@ -342,16 +540,33 @@ Verify new email address with token from verification email.
 **Request:**
 ```json
 {
-  "token": "email-change-token-from-email"
+  "token": "gAAAAABk...Fernet-token-from-email"
 }
 ```
 
 **Response:** `200 OK`
 ```json
 {
-  "message": "Email updated successfully"
+  "message": "Email updated successfully."
 }
 ```
+
+**Errors:** `400 Token has expired.`, `400 Invalid token.` (tampered, wrong key,
+old plaintext token or wrong type) and `400 User not found.`
+
+**Token format (US-07):** the token is `Fernet(JWT)`, i.e. the JWT (HMAC-SHA256)
+inside a Fernet envelope (AES-128-CBC + HMAC-SHA256). The `new_email` claim is
+therefore **not** readable in transit — the old plaintext JWT leaked the target
+address to every proxy and mail log. The Fernet key is derived as
+`base64url(SHA-256(EMAIL_CHANGE_KEY))`; the payload still carries `sub`, `type`,
+`new_email`, `exp`, `iat` and keeps the 24 h TTL. Tokens issued before this
+change are rejected as `Invalid token.` (clean `ValueError`, no crash) — affected
+users just have to request the change again.
+
+**Side effects:** updates `users.email` **and** the `email` identity's
+`provider_user_id` (so login works with the new address), writes the audit event
+`email_changed` with `old_email`/`new_email`, and sends the security alert to the
+**old** address — the user may no longer control the new one.
 
 ---
 
@@ -371,16 +586,28 @@ Change username (requires authentication, limited to once per 7 days).
 **Response:** `200 OK`
 ```json
 {
-  "message": "Username updated successfully"
+  "message": "Username updated successfully."
 }
 ```
 
 **Username Requirements:**
-- 3-50 characters
-- Alphanumeric + underscore only
-- Unique across all users
+- 3-50 characters (length only — no character-class restriction is enforced)
+- Unique across all users → `409 Username already taken.`
 
-**Rate Limiting:** Once per 7 days per user
+**Rate Limiting:** Once per 7 days per user. Inside the cooldown the endpoint
+answers `429` with the exact unlock time so the UI can show a countdown:
+```json
+{
+  "detail": {
+    "message": "Username can only be changed once every 7 days.",
+    "next_change_at": "2026-11-03T14:22:01.512345+00:00"
+  }
+}
+```
+
+**Side effects:** sets `last_username_change_at`, writes the audit event
+`username_changed` (metadata: `new_username`) and dispatches a security
+notification.
 
 ---
 
@@ -405,11 +632,78 @@ Change password while logged in (requires authentication).
 }
 ```
 
+**Errors:** `401 Old password is incorrect.`, `400 New password does not meet
+strength requirements.`, `400 New password must be different from old password.`,
+`401 User identity not found.` (no email/password identity for the account)
+
 **Security:**
 - Validates old password before allowing change
-- All active sessions are invalidated
-- Audit log entry created
-- Security notification email sent
+- All active sessions are invalidated (bulk `UPDATE` on `user_refresh_tokens`)
+- Audit log entry `password_change`
+- Security notification dispatched (see [Security Notifications](#security-notifications-us-09))
+
+---
+
+### Game Endpoints
+
+**POST /api/game/correct** · **POST /api/game/incorrect**
+
+Record an answer and return the updated score (requires authentication).
+
+**Headers:** `Authorization: Bearer <access_token>`
+
+**Request:**
+```json
+{
+  "bits": 4
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "message": "Correct answer recorded",
+  "user_id": "01234567-89ab-cdef-0123-456789abcdef",
+  "correct_count": 13,
+  "incorrect_count": 1,
+  "points": 36
+}
+```
+
+Scoring: a correct answer adds `bits`, an incorrect one subtracts `4 × bits`
+(message `"Incorrect answer recorded"`, points may go negative). The
+`user_stats` row is created on the first submission.
+
+**Errors:** `401` for a missing/invalid access token, `404 User not found.` if the
+token's user no longer exists.
+
+> ⚠️ `bits` is currently **not** range-validated (`GameActionRequest` has no
+> `gt=0`/`le=` constraint), so a client can submit `0`, huge or negative values to
+> move its own score. Adding the boundary check is the open item from the
+> Sprint-1 backlog (`docs/backlog.md` US-03).
+
+---
+
+**GET /api/game/leaderboard**
+
+Top N players by points (DESC). Public — no authentication required.
+
+**Query Parameter:** `limit` (default `50`)
+
+**Response:** `200 OK`
+```json
+{
+  "entries": [
+    {
+      "user_id": "01234567-89ab-cdef-0123-456789abcdef",
+      "username": "username",
+      "correct_count": 13,
+      "incorrect_count": 1,
+      "points": 36
+    }
+  ]
+}
+```
 
 ---
 
@@ -431,27 +725,45 @@ Health check endpoint for Docker and monitoring.
 
 ### Complete Registration Flow
 
-1. **Register** → POST `/api/auth/register`
-2. **Verify Email** → Check email, extract token → POST `/api/auth/verify-email`
+1. **Register** → POST `/api/auth/register` (always `201`, even for a duplicate)
+2. **Verify Email** → Check email, open the link (`GET /verify-email?token=…`) or
+   POST `/api/auth/verify-email` with the token
 3. **Login** → POST `/api/auth/login` → Receive access token + refresh cookie
 4. **Use API** → Include `Authorization: Bearer <access_token>` header
-5. **Refresh** → POST `/api/auth/refresh` (uses cookie automatically)
-6. **Logout** → POST `/api/auth/logout`
+5. **Refresh** → POST `/api/auth/refresh` (uses cookie automatically, and gets a
+   *new* refresh cookie back — the old one is dead)
+6. **Logout** → POST `/api/auth/logout` (this device only)
+7. **Logout everywhere** → POST `/api/auth/logout-all` (all devices)
+
+### Session Revocation Flows
+
+| Situation | Endpoint | Effect |
+|---|---|---|
+| User logs out normally | `POST /api/auth/logout` | Revokes the refresh token in the cookie |
+| User changes or resets password | `POST /api/user/change-password`, `POST /api/auth/reset-password` | Revokes **all** refresh tokens |
+| User suspects a compromise | `POST /api/auth/logout-all` | Revokes **all** refresh tokens, returns the count |
+| Stolen token is replayed | detected by `POST /api/auth/refresh` | Revokes **all** refresh tokens + audit event `refresh_token_replay_detected` |
+
+Access tokens are never revoked early — they expire on their own after 15 minutes.
 
 ### Password Reset Flow
 
-1. **Request Reset** → POST `/api/auth/request-password-reset`
-2. **Check Email** → Extract reset token
-3. **Reset Password** → POST `/api/auth/reset-password`
-4. **Login with New Password** → POST `/api/auth/login`
+1. **Request Reset** → POST `/api/auth/request-password-reset` (generic answer either way)
+2. **Check Email** → Open the reset link `{BASE_URL}/reset-password?token=…` — the page
+   is served by the frontend, the backend only validates the token
+3. **Reset Password** → POST `/api/auth/reset-password` with token + new password
+4. **All other sessions die** → refresh tokens are revoked, so every device must log in again
+5. **Login with New Password** → POST `/api/auth/login`
 
 ### Email Change Flow
 
 1. **Login** → Get access token
 2. **Request Email Change** → PATCH `/api/user/email` (with Bearer token)
-3. **Check New Email** → Extract verification token
+3. **Check New Email** → Extract the Fernet-encrypted verification token
 4. **Verify New Email** → POST `/api/auth/verify-email-change`
-5. **Login with New Email** → POST `/api/auth/login`
+5. **Alert to the old address** → the `email_changed` notification is delivered to the
+   previous address, so a takeover is visible there
+6. **Login with New Email** → POST `/api/auth/login`
 
 ### Password Change Flow
 
@@ -462,43 +774,162 @@ Health check endpoint for Docker and monitoring.
 
 ## Security Features
 
-### Rate Limiting
-- **Login:** 5 attempts per minute per IP + email
-- **Registration:** 3 attempts per hour per IP + email
-- **Resend Verification:** 3 attempts per hour per IP + email
-- **Username Change:** Once per 7 days per user
+Sprint 3 hardened the Sprint 2 auth stack against the findings of the 2026-10-26
+security review (CRITICAL → MEDIUM). Every item below maps to a story in
+[docs/auth-hardening-plan.md](docs/auth-hardening-plan.md), the rationale and
+trade-offs live in [ADR 001](docs/adr/001-auth-hardening.md).
 
-Auth limits are stored in the Postgres table `rate_limit_attempt` (ADR 001 —
+### Configuration Secrets (US-01) 🔴
+- `JWT_SECRET` is a required `SecretStr`: empty, `< 32` characters, or the old
+  default `dev-secret-change-in-production` stops the app at startup
+- No fallback secret anywhere in the code — an unsigned/guessed token can never
+  be accepted because there is no known default to guess
+- `Settings.__init__` rewrites pydantic `ValidationError.input` for every secret
+  field, so a crash traceback can never print `DB_PW`, `SMTP_PASSWORD`,
+  `JWT_SECRET` or `EMAIL_CHANGE_KEY`
+
+### Refresh Token Rotation (US-02) 🟠
+- Each `/api/auth/refresh` revokes the presented token and issues a new access +
+  refresh pair — a token is single-use, never reusable for 7 days
+- Only the SHA-256 hash of the token is stored (`user_refresh_tokens.token_hash`)
+- **Replay detection:** a token that is presented while already revoked is
+  treated as stolen → **all** refresh tokens of the account are revoked
+  (aggressive strategy, ADR 001 DEC-02), audit event
+  `refresh_token_replay_detected`, `401` with a distinct detail message
+- **Residual risk:** an attacker who refreshes before the legitimate user wins
+  the race; and a lost/duplicated request can look like a replay and log the
+  real user out. The audit entry carries IP and user agent so the difference is
+  visible after the fact.
+
+### Anti-Enumeration (US-03) 🟠
+- `/api/auth/register` always answers `201` with
+  *"If this email is available, a verification mail has been sent."* and
+  `user_id: null` — duplicate email or username included, no `409` any more
+- Timing-safe path: the password is **always** hashed (bcrypt ≈ 190 ms) and a
+  verification token is **always** created, before the existence checks are
+  evaluated. The duplicate path rolls the transaction back instead of returning
+  early, so both branches take the same time
+- The unique-constraint race is caught (`IntegrityError`) and answered with the
+  same generic `201`
+- Login mirrors this: unknown email and wrong password both answer
+  `401 Invalid credentials.`
+- `POST /api/auth/resend-verification` applies the same rule (US-08): unknown,
+  unverified and already-verified addresses all get
+  *"If this email is registered and unverified, a new mail has been sent."*, and a
+  failing SMTP send is swallowed rather than surfaced
+- **Residual risk:** a mail-volume side channel (a real verification mail is
+  only sent for a fresh address) and the `403 Account not verified.` on login,
+  both of which require an authenticated position to observe.
+
+### Persistent Rate Limiting (US-04) 🟠
+
+| Endpoint | Limit | Key |
+|---|---|---|
+| `POST /api/auth/login` | 5 / minute | `login:<ip>:<email>` |
+| `POST /api/auth/register` | 3 / hour | `register:<ip>:<email>` |
+| `POST /api/auth/resend-verification` | 3 / hour | `resend:<ip>:<email>` |
+| Security notification delivery | 10 / hour | `security_notification:<user_id>:<action>` |
+| `PATCH /api/user/username` | 1 / 7 days | `last_username_change_at` on the user row |
+
+Limits are stored in the Postgres table `rate_limit_attempt` (ADR 001 DEC-01 —
 no Redis in this project) instead of process memory, so they survive restarts
 and are shared across workers. Expired rows are swept on every check. Blocked
-requests answer `429 Too Many Requests`.
+requests answer `429 Too Many Requests`. The in-memory dict that used to hold
+registration attempts is gone.
+
+**Residual risk:** one indexed query per request (latency under high load), and
+no atomic counter — a highly parallel burst can overshoot the limit marginally.
+
+### Adaptive Login Lockout (US-05) 🟡
+- Progressive lockout **per IP address** (never per account, so an attacker
+  cannot lock out a victim): 1 minute after 5 failures, 5 minutes after 10,
+  15 minutes after 20
+- All three counters are rows in `rate_limit_attempt`
+  (`login_lockout_1min|5min|15min:<ip>`), so the lockout is persistent too
+- A successful login deletes all lockout rows for that IP (and the rate-limit
+  row for that IP + email), so typos never accumulate into a block
+- While locked out: `429 Too many failed login attempts. Account locked out.
+  Try again later.` — generic, no hint about account existence
+- **Residual risk:** distributed brute force from many IPs, and legitimate users
+  sharing a NAT/source IP (corporate network, campus WiFi). Follow-up: CAPTCHA
+  after 10 failures (documented in ADR 001, not implemented).
 
 ### Session Management
-- **Access Tokens:** JWT, 15 minutes TTL
-- **Refresh Tokens:** Opaque, 7 days TTL, stored in HttpOnly cookies
-- **Session Invalidation:** All sessions revoked on password change/reset
+- **Access Tokens:** JWT (HS256), 15 minutes TTL, sent as `Authorization: Bearer`
+- **Refresh Tokens:** JWT with `type: refresh` + `jti`, 7 days TTL, stored in an
+  HttpOnly / SameSite=Strict cookie; only the SHA-256 hash is persisted
+- **Rotation:** single-use refresh tokens (US-02, see above)
+- **Session Invalidation:** all sessions are revoked on password change, password
+  reset, refresh-token replay, and on demand via `POST /api/auth/logout-all` (US-06)
+- `COOKIE_SECURE=true` is the default; set it to `false` for local HTTP
+  development (auto-derivation from `BASE_URL` is a planned follow-up, ADR 001 DEC-05)
+
+### Encrypted Email-Change Tokens (US-07) 🟡
+- The email-change token is `Fernet(JWT)` — AES-128-CBC + HMAC-SHA256 envelope
+  around the signed JWT, so the `new_email` claim is not readable in a proxy,
+  mail log or browser history
+- Key material: `EMAIL_CHANGE_KEY` (≥ 32 chars, `SecretStr`), converted to the
+  32-byte url-safe-base64 key Fernet requires via `base64url(SHA-256(key))`
+- Decryption happens before JWT verification; any decrypt failure maps to
+  `400 Invalid token.` — old plaintext tokens fail cleanly, they do not crash
+- **Migration:** tokens issued before US-07 are invalid; users must start the
+  email change again. Rotating `EMAIL_CHANGE_KEY` invalidates outstanding tokens
+  by design (no key rotation in the MVP, ADR 001 DEC-04)
+- **Deployment prerequisite:** the compose stack does not pass `EMAIL_CHANGE_KEY`
+  into the container yet, so it currently falls back to the test-suite default key.
+  Encryption is then formally active but worthless — see the warning under
+  [Configuration](#configuration)
 
 ### Audit Logging
-All critical actions are logged with:
-- User ID
-- Timestamp
-- IP address
-- User agent
-- Action type (password_change, password_reset, email_change, username_change)
+Every security-relevant action is written to `user_audit_log` with user ID,
+timestamp, IP address, user agent and JSON metadata. Recorded actions:
 
-### Security Notifications
-Email notifications sent for:
-- Password changes
-- Password resets
-- Email changes
-- Username changes
+| Action | Trigger |
+|---|---|
+| `registration` | `POST /api/auth/register` — fresh accounts only; the duplicate path rolls the transaction back, so no row is kept (deliberate: a rejected duplicate must not leave a trace that leaks the address) |
+| `email_verified` | verification via API or `GET /verify-email` link |
+| `verification_resend_requested` | `POST /api/auth/resend-verification` (known address) |
+| `email_change_requested` | `PATCH /api/user/email` (metadata: `new_email`) |
+| `email_changed` | `POST /api/auth/verify-email-change` (metadata: `old_email`, `new_email`) |
+| `username_changed` | `PATCH /api/user/username` (metadata: `new_username`) |
+| `password_change` | `POST /api/user/change-password` |
+| `password_reset` | `POST /api/auth/reset-password` |
+| `refresh_token_replay_detected` | replayed refresh token (metadata: `token_id`, `expired_at`) |
+| `all_sessions_revoked` | `POST /api/auth/logout-all` (metadata: `session_count`) |
+
+### Security Notifications (US-09)
+Self-contained HTML alert emails (no external CSS, images or tracking links) for
+sensitive account events:
+- **Templates** per action: `password_reset`, `password_change`, `email_changed`,
+  `username_changed`, `refresh_token_replay_detected`, plus a generic fallback for
+  unknown actions — the alert for `email_changed` is deliberately sent to the **old**
+  address
+- **XSS protection:** every user-controlled value (username, IP, user agent,
+  old/new email, new username, even the action name in `<title>`) passes
+  `_sanitize()` / `html.escape(..., quote=True)` before it reaches the template
+- **Recipient validation:** addresses are checked against an RFC-5322-lite regex
+  so a malformed or header-injection address never reaches the MTA
+- **Spam/DoS protection:** delivery is capped at 10 notifications per user and
+  action per hour through the same persistent `RateLimitService`
+- **Failure isolation:** a broken mail pipeline is logged and swallowed — it can
+  never fail the security action that triggered it. The audit log is the source
+  of truth, the mail is a courtesy copy
+
+> **⚠️ Current wiring gap:** `SecurityNotificationService` and its templates are
+> complete and covered by `tests/test_security_notifications.py`, but the hook the
+> flows call — `src/services/audit_service.send_security_notification()` — is still
+> a no-op placeholder. Today only the `email_changed` alert is actually delivered
+> (via `EmailService.send_security_notification_email` in
+> `POST /api/auth/verify-email-change`). Password changes/resets, username changes
+> and replay alerts are audited but not yet mailed. Connecting that hook is the
+> open follow-up for US-09.
 
 ### Password Requirements
-- Minimum 8 characters
-- Maximum 128 characters
-- At least 1 uppercase letter
-- At least 1 digit
-- Hashed with bcrypt (cost 12)
+- 8 – 128 characters
+- at least one uppercase letter, one lowercase letter, one digit **and** one
+  special character
+- Every rule violation is reported as its own message in `detail.errors`
+- Hashed with bcrypt (cost 12); verification uses `bcrypt.checkpw`
 
 ## Testing
 
@@ -535,16 +966,44 @@ uv run pytest -v
 
 ### Test Structure
 
-- `tests/test_auth_register.py`: Registration + email verification (US-13)
+**Sprint 2 — authentication system**
+- `tests/test_auth_register.py`: Registration + email verification (US-13,
+  plus the anti-enumeration cases from US-03)
 - `tests/test_auth_login.py`: Login, refresh, logout (US-14)
 - `tests/test_auth_password_reset.py`: Password reset flow (US-15)
 - `tests/test_user_changes.py`: Email/username change (US-16)
 - `tests/test_user_password_change.py`: Password change while logged in (US-19)
 - `tests/test_integration_auth.py`: End-to-end auth flows (US-17)
 - `tests/test_healthz.py`: Health check endpoint (US-18)
-- `tests/test_migrations.py`: Auth schema migration vs. PostgreSQL (US-09, US-22)
+- `tests/test_jwt_utils.py`: Token creation/decoding (US-12)
+- `tests/test_services.py`: Auth/user service layer units
 - `tests/test_auth_coverage.py`: Auth router edge cases — rate-limit key
   fallback, verify-email/logout corners (US-21 part 2)
+- `tests/test_user_me.py`: `GET /api/user/me` profile + stats
+
+**Sprint 3 — security hardening**
+- `tests/test_settings.py`: `JWT_SECRET`/`EMAIL_CHANGE_KEY` validation, secret
+  masking in `ValidationError`s (US-01)
+- `tests/test_auth_refresh.py`: Rotation, expired/revoked tokens, replay →
+  full session kill + audit event (US-02)
+- `tests/test_rate_limit.py`: DB-backed limiter — window, expiry, sweep (US-04)
+- `tests/test_auth_resend_verification.py`: Silent resend + enumeration safety
+  (US-04/US-08)
+- `tests/test_login_lockout.py`: Progressive per-IP lockout, reset on success (US-05)
+- `tests/test_logout_all.py`: Kill-all sessions, idempotency, auth required (US-06)
+- `tests/test_email_change_token.py`: Fernet round-trip, tampering, wrong key,
+  legacy plaintext tokens (US-07)
+- `tests/test_security_notifications.py`: Templates, HTML escaping, recipient
+  validation, delivery rate limit (US-09)
+
+**Infrastructure**
+- `tests/test_migrations.py`: Schema migrations vs. PostgreSQL (US-09, US-22, v003)
+- `tests/test_smtp_integration.py`: SMTP settings + startup wiring (US-20)
+- `tests/test_email_service_ssl.py`: STARTTLS / implicit-TLS handling
+- `tests/test_init_db.py`, `tests/test_smoke.py`, `tests/test_deployment.py`:
+  Startup script, app boot, Docker/CI contracts
+- `tests/test_game.py`: Game/stats endpoints
+- `tests/test_architecture_docs.py`: Guards the docs themselves
 
 ### Coverage Requirements
 
@@ -557,11 +1016,23 @@ coverage.py loses the trace after the first `await` into the DB layer and
 understates router coverage badly (this made `src/routers/auth.py` look
 like 75 % when existing tests already exercised ~98 % of it).
 
-**Current Test Results:**
-- 157 tests passed
-- `src/routers/auth.py` at 100 %, total coverage 97 %
-- All authentication flows covered
-- Integration tests verify end-to-end scenarios
+**Current Test Results** (measured 2026-10-27, `uv run pytest --cov=src`):
+- **340 tests passed**, total coverage **92.83 %** (gate: 80 %)
+- Security-critical modules at 100 %: `config.py`, `models/auth.py`,
+  `services/auth_service.py`, `services/rate_limit_service.py`,
+  `services/security_notification_service.py`, `utils/login_lockout.py`,
+  `utils/jwt_utils.py`, `migrations/v001_auth_schema.py`
+- Routers: `routers/auth.py` 99 %, `routers/user.py` 95 %
+- Hardening units: `utils/email_change_token.py` 94 %,
+  `services/password_reset_service.py` 94 %, `services/user_service.py` 96 %,
+  `migrations/v003_rate_limit.py` 88 %
+- All authentication and hardening flows are covered, including adversarial
+  cases (replay, lockout escalation, tampered/legacy tokens, enumeration timing)
+- Coverage debt below the per-file target, tracked for the next sprint:
+  `main.py` 63 % (lifespan + HTML verification pages), `email_templates.py` 79 %
+  (transactional builders), `migrations/v002_game_stats.py` 33 %
+- Excluded from the coverage run by `pyproject.toml`: `init_db.py`,
+  `routers/game.py`, `services/email_service.py` (needs a real SMTP server)
 
 ## Docker
 
@@ -609,6 +1080,19 @@ Database migrations run automatically on application startup via the lifespan co
 
 ## Sprint Progress
 
+> **Numbering note:** this README numbers the delivery streams (Sprint 1 = test
+> foundation, Sprint 2 = authentication system, Sprint 3 = security hardening).
+> The docs under `docs/` predate that convention: `docs/sprint3-plan.md` calls the
+> *production-readiness* sprint (US-20 … US-22, delivered between Sprint 2 and 3)
+> "Sprint 3", and `docs/auth-hardening-plan.md` numbers four sprints 1 – 4 *inside*
+> the hardening stream (Sprint 1 = ADR/preparation, Sprint 2 = 🔴/🟠 stories
+> US-01 … US-04, Sprint 3 = 🟡 stories US-05 … US-08, Sprint 4 = 🟢//📖 stories
+> US-08b … US-12). The story IDs below are the canonical ones used by the plan, the
+> `# US-xx` comments in `src/` and the commit messages — not a renumbering. Because
+> the Sprint-2 backlog numbers its own stories US-09 … US-19, a number such as
+> `US-09` appears twice in this file with different meanings; the sprint heading
+> tells you which backlog is meant.
+
 ### Sprint 2 - Authentication System (COMPLETED)
 
 **Status:** ✅ All tasks completed (11/11 User Stories)
@@ -630,8 +1114,57 @@ Database migrations run automatically on application startup via the lifespan co
 - 123 tests passed
 - 80%+ code coverage enforced
 - All authentication flows implemented and tested
-- Security features: rate limiting, audit logging, session invalidation
+- Security features: rate limiting (made persistent in Sprint 3 / US-04), audit
+  logging, session invalidation
 - Multi-provider schema ready for OAuth integration
+- Findings of the 2026-10-26 security review → handed over to Sprint 3
+
+### Sprint 3 - Security Hardening (COMPLETED)
+
+**Status:** ✅ All stories completed and merged (US-01 … US-09)
+
+**Context:** Defense-in-depth on the Sprint 2 auth stack, closing the CRITICAL /
+HIGH / MEDIUM findings of the 2026-10-26 review. Design decisions and threat
+analysis: [ADR 001](docs/adr/001-auth-hardening.md); story definitions:
+[docs/auth-hardening-plan.md](docs/auth-hardening-plan.md); adversarial test
+plan: [docs/auth-hardening-test-plan.md](docs/auth-hardening-test-plan.md). It
+builds on the production-readiness work delivered in between (US-20 SMTP wiring,
+US-21 coverage ≥ 80 %, US-22 PostgreSQL migration tests — see
+[docs/sprint3-review.md](docs/sprint3-review.md)).
+
+**User Stories** (hardening backlog, severity from the review):
+- ✅ US-01: `JWT_SECRET` as required `SecretStr` in Settings, fail-fast startup 🔴
+- ✅ US-02: Refresh Token Rotation + replay detection (kills all sessions) 🟠
+- ✅ US-03: Anti-Enumeration — generic registration answer, timing-safe paths 🟠
+- ✅ US-04: Persistent DB-backed rate limiting (`rate_limit_attempt`, migration
+  `v003`) + `POST /api/auth/resend-verification` 🟠
+- ✅ US-05: Adaptive login lockout — progressive per-IP blocks (1 / 5 / 15 min) 🟡
+- ✅ US-06: `POST /api/auth/logout-all` — revoke every active session 🟡
+- ✅ US-07: Email-change tokens encrypted with Fernet (no plaintext address in the JWT) 🟡
+- ✅ US-08: Verification resend with silent, enumeration-safe handling 🟡
+- ✅ US-09: Security notification emails — HTML templates, XSS-escaped, rate-limited 🟢
+  (delivery hook still a placeholder, see [Security Notifications](#security-notifications-us-09))
+- ➡️ US-08b (password-reset UI) lives in the frontend repository and is **not** part
+  of this backend
+
+**Results:**
+- 340 tests passed (up from 157), total coverage 92.83 % — gate 80 %
+- New table `rate_limit_attempt` (migration `v003_rate_limit`), new modules
+  `services/rate_limit_service.py`, `services/security_notification_service.py`,
+  `services/email_templates.py`, `utils/login_lockout.py`, `utils/email_change_token.py`
+- New endpoints: `POST /api/auth/logout-all` (US-06) and
+  `POST /api/auth/resend-verification` (US-04/US-08); `/api/auth/refresh` now
+  rotates the cookie on every call — breaking for clients that ignore the
+  `Set-Cookie` response
+- ADR 001 decisions implemented: DEC-01 (DB instead of Redis), DEC-02 (aggressive
+  replay revocation), DEC-03 (IP-based backoff), DEC-04 (Fernet without key rotation)
+- No CRITICAL or HIGH finding from the review remains open
+
+**Follow-ups carried into the next sprint:** see
+[Carried-over hardening work](#carried-over-hardening-work) — the open items are
+the notification transport wiring (US-09), the low-priority hardening stories
+(US-10 … US-12), `EMAIL_CHANGE_KEY` in the compose stack, the frontend
+`/reset-password` page and the coverage debt.
 
 ### Sprint 1 - Test Foundation (COMPLETED)
 
@@ -644,12 +1177,33 @@ Database migrations run automatically on application startup via the lifespan co
 
 ## Roadmap
 
-### Sprint 3 (Planned)
-- OAuth Provider Integration (GitHub, Google)
+Sprint 3 (security hardening) is **done** — see [Sprint Progress](#sprint-3---security-hardening-completed).
+
+### Sprint 4 (Planned)
+- OAuth Provider Integration (GitHub, Google) — schema is ready since Sprint 2 (US-09)
 - Phone Authentication (SMS verification)
 - Account Deletion (GDPR compliance)
-- Multi-Device Management ("Which devices are logged in?")
-- HTML Email Templates
+- Device list for "which devices are logged in?" — the revocation half already
+  exists (`POST /api/auth/logout-all`), a per-device view over
+  `user_refresh_tokens` is still missing
+- Frontend: password-reset pages (`/forgot-password`, `/reset-password?token=…`) —
+  backend-complete, see US-08b
+
+### Carried-over hardening work
+- Forward `EMAIL_CHANGE_KEY` in `docker-compose.yaml` (and set a real value in the
+  deployment `.env`) — today the container runs on the default test key, which
+  defeats US-07 in production
+- Wire `audit_service.send_security_notification()` to the email transport so
+  password/username/replay alerts actually leave the server (US-09)
+- US-10: timing-safe token comparison (`hmac.compare_digest`)
+- US-11: `COOKIE_SECURE` auto-derivation from `BASE_URL` + CSRF double-submit for
+  `/refresh` (ADR 001 DEC-05)
+- US-12: `docs/runbooks/auth-incident.md` (replay detected, JWT secret leaked,
+  brute force), structured JSON logging, ADR 001 status → *Accepted*
+- CAPTCHA after repeated login failures — mitigation for distributed brute force
+  (documented as follow-up in ADR 001 DEC-03)
+- Close the coverage debt: `main.py` 63 %, `email_templates.py` 79 %,
+  `migrations/v002_game_stats.py` 33 %
 
 ## License
 
