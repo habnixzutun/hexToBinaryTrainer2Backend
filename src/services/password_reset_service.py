@@ -60,6 +60,8 @@ async def reset_password(
     session: AsyncSession,
     raw_token: str,
     new_password: str,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
 ) -> None:
     """Validate token and update the user's password.
 
@@ -126,6 +128,8 @@ async def reset_password(
         session=session,
         user_id=user_id,
         action="password_reset",
+        ip_address=ip_address,
+        user_agent=user_agent,
     )
 
     await session.commit()
@@ -134,4 +138,6 @@ async def reset_password(
         session,
         user_id=user_id,
         action="password_reset",
+        ip_address=ip_address,
+        user_agent=user_agent,
     )

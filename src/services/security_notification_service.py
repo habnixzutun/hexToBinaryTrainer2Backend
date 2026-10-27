@@ -19,12 +19,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.auth import User
+from src.services.device_info_service import parse_user_agent
 from src.services.email_service import EmailService
 from src.services.email_templates import (
     NotificationContext,
     build_context,
     render_security_notification,
 )
+from src.services.geolocation_service import GeolocationService, NullGeolocationService
 from src.services.rate_limit_service import RateLimitService
 
 logger = logging.getLogger(__name__)
@@ -68,10 +70,12 @@ class SecurityNotificationService:
         email_service: EmailService,
         session: AsyncSession,
         rate_limit_service: RateLimitService | None = None,
+        geolocation_service: GeolocationService | None = None,
     ) -> None:
         self._email_service = email_service
         self._session = session
         self._rate_limit_service = rate_limit_service or RateLimitService(session)
+        self._geolocation_service = geolocation_service or NullGeolocationService()
 
     async def _lookup_user_email(self, user_id: str) -> tuple[str, str] | None:
         """Return ``(email, username)`` for ``user_id``, or ``None``."""
@@ -168,7 +172,8 @@ class SecurityNotificationService:
             action=action,
             timestamp=datetime.now(UTC),
             ip_address=ip_address,
-            user_agent=user_agent,
+            user_agent=parse_user_agent(user_agent),
+            location=await self._geolocation_service.lookup(ip_address),
             extra=extra,
         )
 

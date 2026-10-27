@@ -501,6 +501,8 @@ async def reset_password(
             session=session,
             raw_token=body.token,
             new_password=body.new_password,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
         )
     except ValueError as exc:
         reason = str(exc)

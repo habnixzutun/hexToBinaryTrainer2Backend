@@ -45,13 +45,15 @@ async def send_security_notification(
     security-relevant flow that triggered the notification.
     """
     # Lazy import to avoid circular dependency at module load time
-    from src.services.email_wiring import get_email_service
+    from src.services.email_wiring import get_email_service, get_geolocation_service
     from src.services.security_notification_service import SecurityNotificationService
 
     email_service = get_email_service()
+    geolocation_service = get_geolocation_service()
     notification_service = SecurityNotificationService(
         email_service=email_service,
         session=session,
+        geolocation_service=geolocation_service,
     )
     await notification_service.send(
         user_id=user_id,
