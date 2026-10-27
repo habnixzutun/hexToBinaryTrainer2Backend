@@ -9,7 +9,6 @@ import smtplib
 import ssl
 
 import pytest
-
 from src.services import email_service
 from src.services.email_service import SMTPEmailService
 
@@ -81,7 +80,7 @@ def test_port_465_uses_implicit_ssl_without_starttls(patched_smtplib):
     """Port 465 must use SMTP_SSL with a verifying context, no STARTTLS."""
     fake_plain, fake_ssl = patched_smtplib
 
-    _service(465)._send_sync("to@example.com", "Subject", "Body")
+    _service(465)._send_sync("to@example.com", "Subject", "<p>html</p>", "plain body")
 
     assert fake_plain.calls == []
     assert _call_names(fake_ssl) == ["init", "login", "sendmail", "exit"]
@@ -97,7 +96,7 @@ def test_non_465_ports_use_starttls_with_verifying_context(patched_smtplib, port
     """Non-465 ports keep the SMTP + STARTTLS path with certificate verification."""
     fake_plain, fake_ssl = patched_smtplib
 
-    _service(port)._send_sync("to@example.com", "Subject", "Body")
+    _service(port)._send_sync("to@example.com", "Subject", "<p>html</p>", "plain body")
 
     assert fake_ssl.calls == []
     assert _call_names(fake_plain) == ["init", "starttls", "login", "sendmail", "exit"]
@@ -109,7 +108,12 @@ def test_sendmail_uses_configured_from_and_to(patched_smtplib):
     """Envelope sender/receiver come from the service configuration."""
     _, fake_ssl = patched_smtplib
 
-    _service(465)._send_sync("recipient@example.com", "Subject", "Body")
+    _service(465)._send_sync(
+        "recipient@example.com",
+        "Subject",
+        "<p>html</p>",
+        "plain body",
+    )
 
     sendmail_call = next(c for c in fake_ssl.calls if c[0] == "sendmail")
     assert sendmail_call[1] == ("user@example.com", "recipient@example.com")
@@ -126,6 +130,11 @@ def test_starttls_failure_still_closes_connection(patched_smtplib, monkeypatch):
     monkeypatch.setattr(_FakeSMTP, "starttls", _failing_starttls)
 
     with pytest.raises(smtplib.SMTPNotSupportedError):
-        _service(587)._send_sync("to@example.com", "Subject", "Body")
+        _service(587)._send_sync(
+            "to@example.com",
+            "Subject",
+            "<p>html</p>",
+            "plain body",
+        )
 
     assert "exit" in _call_names(fake_plain)

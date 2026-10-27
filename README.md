@@ -148,7 +148,9 @@ Register a new user account.
 - At least 1 uppercase letter
 - At least 1 digit
 
-**Rate Limiting:** 3 registrations per hour per IP address
+**Rate Limiting:** 3 registrations per hour per IP address + email combination
+(`429 Too Many Requests` when exceeded). Persisted in the `rate_limit_attempt`
+table, so the limit survives restarts and is shared across workers.
 
 ---
 
@@ -169,6 +171,32 @@ Verify email address with token from registration email.
   "message": "Email verified successfully. You can now log in."
 }
 ```
+
+---
+
+**POST /api/auth/resend-verification**
+
+Send the verification email again for an unverified account. Silent handling:
+the response is identical whether the address exists, is already verified, or
+is unknown, so the endpoint cannot be used for email enumeration.
+
+**Request:**
+```json
+{
+  "email": "user@example.com"
+}
+```
+
+**Response:** `200 OK`
+```json
+{
+  "message": "If this email is registered and unverified, a new mail has been sent."
+}
+```
+
+**Rate Limiting:** 3 resends per hour per IP address + email combination
+(`429 Too Many Requests` when exceeded). Every request for a known address is
+recorded as the `verification_resend_requested` audit event.
 
 ---
 
@@ -196,7 +224,9 @@ Authenticate user and receive access token + refresh cookie.
 
 **Headers:** `Set-Cookie: refresh_token=<token>; HttpOnly; Secure; SameSite=Strict; Path=/api/auth/refresh`
 
-**Rate Limiting:** 5 login attempts per minute per email address
+**Rate Limiting:** 5 login attempts per minute per IP address + email
+combination (`429 Too Many Requests` when exceeded), backed by the persistent
+`rate_limit_attempt` table
 
 ---
 
@@ -433,9 +463,15 @@ Health check endpoint for Docker and monitoring.
 ## Security Features
 
 ### Rate Limiting
-- **Login:** 5 attempts per minute per email
-- **Registration:** 3 attempts per hour per IP
+- **Login:** 5 attempts per minute per IP + email
+- **Registration:** 3 attempts per hour per IP + email
+- **Resend Verification:** 3 attempts per hour per IP + email
 - **Username Change:** Once per 7 days per user
+
+Auth limits are stored in the Postgres table `rate_limit_attempt` (ADR 001 —
+no Redis in this project) instead of process memory, so they survive restarts
+and are shared across workers. Expired rows are swept on every check. Blocked
+requests answer `429 Too Many Requests`.
 
 ### Session Management
 - **Access Tokens:** JWT, 15 minutes TTL

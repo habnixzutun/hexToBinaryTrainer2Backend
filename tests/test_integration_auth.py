@@ -8,11 +8,12 @@ email change, password change, and multi-device scenarios.
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from src.database.engine import Base, get_db
 from src.main import app
+from src.models.auth import RateLimitAttempt
 from src.routers.auth import set_email_service as auth_set_email_service
 from src.routers.user import get_email_service as user_get_email_service
 from src.services.email_service import MockEmailService
@@ -21,16 +22,17 @@ TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
 
 @pytest.fixture(autouse=True)
-def reset_rate_limiters():
-    """Reset rate limiters between tests."""
-    from src.routers.auth import _registration_attempts
-    from src.routers.auth import limiter as auth_limiter
+async def reset_rate_limiters(engine):
+    """Reset rate limiters between tests (US-04: DB-based rate limiting)."""
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with async_session() as session:
+        await session.execute(delete(RateLimitAttempt))
+        await session.commit()
 
-    _registration_attempts.clear()
-    auth_limiter.reset()
     yield
-    _registration_attempts.clear()
-    auth_limiter.reset()
+    async with async_session() as session:
+        await session.execute(delete(RateLimitAttempt))
+        await session.commit()
 
 
 @pytest.fixture

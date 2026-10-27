@@ -1,13 +1,10 @@
 """Auth router: registration, email verification, login, refresh, logout."""
 
-import json
 from datetime import UTC, datetime
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid_utils import uuid7
@@ -23,16 +20,34 @@ from src.models.auth_schemas import (
 from src.services import auth_service, password_reset_service
 from src.services.audit_service import log_audit_action
 from src.services.email_service import EmailService, MockEmailService
+from src.services.rate_limit_service import RateLimitService
 from src.utils.jwt_utils import create_verification_token, decode_token
 from src.utils.password import hash_password, validate_password_strength
 
 COOKIE_NAME = "refresh_token"
 COOKIE_MAX_AGE = 7 * 24 * 60 * 60  # 7 days in seconds
 
-RATE_LIMIT_MAX = 3
-RATE_LIMIT_WINDOW_SECONDS = 3600
+SECONDS_PER_MINUTE = 60
+SECONDS_PER_HOUR = 3600
 
-_registration_attempts: dict[str, list[float]] = {}
+# US-04: persistent (DB-backed) rate limits. Keys combine the client IP with
+# the submitted email, so neither a rotating IP pool nor a server restart can
+# lift a limit. Limits and windows are declared per endpoint because the abuse
+# profiles differ (brute force vs. registration bombing vs. mail bombing).
+LOGIN_RATE_LIMIT_MAX = 5
+LOGIN_RATE_LIMIT_WINDOW_SECONDS = SECONDS_PER_MINUTE
+REGISTER_RATE_LIMIT_MAX = 3
+REGISTER_RATE_LIMIT_WINDOW_SECONDS = SECONDS_PER_HOUR
+RESEND_RATE_LIMIT_MAX = 3
+RESEND_RATE_LIMIT_WINDOW_SECONDS = SECONDS_PER_HOUR
+
+# US-04: single generic answer for /resend-verification. Every outcome —
+# unknown address, already verified, mail sent — returns exactly this text so
+# the endpoint cannot be used to enumerate registered emails.
+RESEND_VERIFICATION_MESSAGE = (
+    "If this email is registered and unverified, a new mail has been sent."
+)
+
 _default_email_service: EmailService = MockEmailService()
 
 
@@ -44,35 +59,6 @@ def set_email_service(service: EmailService) -> None:
     global _default_email_service
     _default_email_service = service
 
-
-def _check_rate_limit(ip: str) -> None:
-    now = datetime.now(UTC).timestamp()
-    window_start = now - RATE_LIMIT_WINDOW_SECONDS
-    attempts = [t for t in _registration_attempts.get(ip, []) if t > window_start]
-    _registration_attempts[ip] = attempts
-    if len(attempts) >= RATE_LIMIT_MAX:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many registration attempts. Try again later.",
-        )
-    attempts.append(now)
-    _registration_attempts[ip] = attempts
-
-
-def _email_key(request: Request) -> str:
-    """Rate limit key derived from login email, falls back to IP."""
-    try:
-        raw = getattr(request.state, "_body", b"")
-        data = json.loads(raw)
-        email = data.get("email", "")
-        if email:
-            return f"login:{email}"
-    except Exception:
-        pass
-    return get_remote_address(request)
-
-
-limiter = Limiter(key_func=_email_key)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -113,13 +99,22 @@ def _delete_refresh_cookie(response: Response) -> None:
 
 
 @router.post("/login", response_model=LoginResponse)
-@limiter.limit("5/minute")
 async def login(
     request: Request,
     body: LoginRequest,
     response: Response,
     session: AsyncSession = Depends(get_db),
 ) -> LoginResponse:
+    client_ip = request.client.host if request.client else "unknown"
+
+    rate_limit = RateLimitService(session)
+    if not await rate_limit.check(
+        f"login:{client_ip}:{body.email}",
+        limit=LOGIN_RATE_LIMIT_MAX,
+        window_seconds=LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+    ):
+        raise HTTPException(status_code=429, detail="Too many login attempts.")
+
     try:
         access_token, refresh_token = await auth_service.login(
             session, body.email, body.password
@@ -129,9 +124,7 @@ async def login(
             raise HTTPException(
                 status_code=403, detail="Account not verified."
             ) from None
-        raise HTTPException(
-            status_code=401, detail="Invalid credentials."
-        ) from None
+        raise HTTPException(status_code=401, detail="Invalid credentials.") from None
 
     _set_refresh_cookie(response, refresh_token)
     return LoginResponse(access_token=access_token)
@@ -180,7 +173,14 @@ async def register(
     email_service: EmailService = Depends(get_email_service),
 ) -> RegisterResponse:
     client_ip = request.client.host if request.client else "unknown"
-    _check_rate_limit(client_ip)
+
+    rate_limit = RateLimitService(session)
+    if not await rate_limit.check(
+        f"register:{client_ip}:{body.email}",
+        limit=REGISTER_RATE_LIMIT_MAX,
+        window_seconds=REGISTER_RATE_LIMIT_WINDOW_SECONDS,
+    ):
+        raise HTTPException(status_code=429, detail="Too many registration attempts.")
 
     strength_errors = validate_password_strength(body.password)
     if strength_errors:
@@ -296,6 +296,60 @@ async def verify_email(
     await session.commit()
 
     return {"message": "Email verified successfully."}
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+
+@router.post("/resend-verification", status_code=status.HTTP_200_OK)
+async def resend_verification(
+    request: Request,
+    body: ResendVerificationRequest,
+    session: AsyncSession = Depends(get_db),
+    email_service: EmailService = Depends(get_email_service),
+) -> dict:
+    client_ip = request.client.host if request.client else "unknown"
+
+    rate_limit = RateLimitService(session)
+    if not await rate_limit.check(
+        f"resend:{client_ip}:{body.email}",
+        limit=RESEND_RATE_LIMIT_MAX,
+        window_seconds=RESEND_RATE_LIMIT_WINDOW_SECONDS,
+    ):
+        raise HTTPException(status_code=429, detail="Too many requests.")
+
+    result = await session.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+
+    if user is not None:
+        identity_result = await session.execute(
+            select(UserIdentity).where(
+                UserIdentity.user_id == user.id,
+                UserIdentity.provider == "email",
+            )
+        )
+        identity = identity_result.scalar_one_or_none()
+
+        if identity is not None and identity.verified_at is None:
+            verification_token = create_verification_token(user.id)
+            try:
+                await email_service.send_verification_email(
+                    body.email, verification_token
+                )
+            except Exception:
+                # Silent failure: never leak delivery status to the caller
+                pass
+
+        await log_audit_action(
+            session=session,
+            user_id=user.id,
+            action="verification_resend_requested",
+            ip_address=client_ip,
+        )
+        await session.commit()
+
+    return {"message": RESEND_VERIFICATION_MESSAGE}
 
 
 class RequestPasswordResetRequest(BaseModel):
