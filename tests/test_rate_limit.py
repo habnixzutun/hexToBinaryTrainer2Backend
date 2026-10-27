@@ -14,7 +14,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-
 from src.database.engine import Base
 from src.models.auth import RateLimitAttempt
 
@@ -178,7 +177,6 @@ class TestRegisterRateLimit:
     async def client(self, async_engine):
         """Create test client with rate limit cleanup."""
         from httpx import ASGITransport, AsyncClient
-
         from src.database.engine import get_db
         from src.main import app
 
@@ -202,9 +200,8 @@ class TestRegisterRateLimit:
         self, client, async_engine
     ):
         """4th registration attempt with same IP+email should return 429."""
-        from sqlalchemy.orm import sessionmaker
         from sqlalchemy.ext.asyncio import AsyncSession
-
+        from sqlalchemy.orm import sessionmaker
         from src.services.rate_limit_service import RateLimitService
 
         factory = sessionmaker(
@@ -234,9 +231,8 @@ class TestRegisterRateLimit:
         self, client, async_engine
     ):
         """Rate limit key should be per IP+email combination."""
-        from sqlalchemy.orm import sessionmaker
         from sqlalchemy.ext.asyncio import AsyncSession
-
+        from sqlalchemy.orm import sessionmaker
         from src.services.rate_limit_service import RateLimitService
 
         factory = sessionmaker(
@@ -277,7 +273,6 @@ class TestAdversarialRateLimit:
     async def client(self, async_engine):
         """Create test client."""
         from httpx import ASGITransport, AsyncClient
-
         from src.database.engine import get_db
         from src.main import app
 
@@ -306,9 +301,8 @@ class TestAdversarialRateLimit:
         Since httpx doesn't easily allow changing client IP, we test
         via the service directly with simulated IP+email keys.
         """
-        from sqlalchemy.orm import sessionmaker
         from sqlalchemy.ext.asyncio import AsyncSession
-
+        from sqlalchemy.orm import sessionmaker
         from src.services.rate_limit_service import RateLimitService
 
         factory = sessionmaker(

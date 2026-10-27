@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid_utils import uuid7
 
 from src.models.auth import RateLimitAttempt
-from src.services.rate_limit_service import RateLimitService
 
 # Lockout thresholds and durations (in seconds)
 LOCKOUT_THRESHOLD_1MIN = 5

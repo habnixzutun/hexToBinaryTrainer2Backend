@@ -11,10 +11,9 @@ Tests progressive lockout for /login endpoint:
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-
 from src.database.engine import Base
 from src.models.auth import RateLimitAttempt
 
@@ -269,7 +268,6 @@ class TestLoginLockoutIntegration:
     async def client(self, async_engine):
         """Create test client with lockout cleanup."""
         from httpx import ASGITransport, AsyncClient
-
         from src.database.engine import get_db
         from src.main import app
 
@@ -295,9 +293,8 @@ class TestLoginLockoutIntegration:
         """6th login attempt after 5 failures should return 429."""
         from datetime import UTC, datetime
 
-        from sqlalchemy.orm import sessionmaker
         from sqlalchemy.ext.asyncio import AsyncSession
-
+        from sqlalchemy.orm import sessionmaker
         from src.models.auth import User, UserIdentity
         from src.utils.password import hash_password
 
@@ -347,9 +344,8 @@ class TestLoginLockoutIntegration:
         """Successful login should reset the lockout counter."""
         from datetime import UTC, datetime
 
-        from sqlalchemy.orm import sessionmaker
         from sqlalchemy.ext.asyncio import AsyncSession
-
+        from sqlalchemy.orm import sessionmaker
         from src.models.auth import User, UserIdentity
         from src.utils.password import hash_password
 

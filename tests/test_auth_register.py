@@ -197,9 +197,8 @@ class TestRegister:
         self, client, async_engine
     ):
         """Rate limit is per IP+email. Test via service directly."""
-        from sqlalchemy.orm import sessionmaker
         from sqlalchemy.ext.asyncio import AsyncSession
-
+        from sqlalchemy.orm import sessionmaker
         from src.services.rate_limit_service import RateLimitService
 
         factory = sessionmaker(

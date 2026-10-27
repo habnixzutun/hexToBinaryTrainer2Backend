@@ -13,18 +13,15 @@ from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-
 from src.database.engine import Base, get_db
 from src.main import app
 from src.models.auth import RateLimitAttempt, User, UserIdentity
 from src.routers.auth import get_email_service, set_email_service
 from src.services.email_service import MockEmailService
-from src.utils.jwt_utils import create_verification_token
 from src.utils.password import hash_password
-from uuid_utils import uuid7
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 VALID_PASSWORD = "StrongPass1!"

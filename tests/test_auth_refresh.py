@@ -54,7 +54,6 @@ async def reset_rate_limiter():
     consumed by earlier ones and fail with misleading 429 errors.
     """
     from sqlalchemy import delete
-
     from src.models.auth import RateLimitAttempt
 
     # Get the engine from the test setup
@@ -485,7 +484,7 @@ async def test_refresh_replay_audit_metadata(client, engine):
 
 async def test_refresh_replay_sends_security_notification(client):
     """AC 6: send_security_notification is called on replay detection."""
-    from unittest.mock import ANY, AsyncMock, patch
+    from unittest.mock import AsyncMock, patch
 
     login = await client.post(
         "/api/auth/login",

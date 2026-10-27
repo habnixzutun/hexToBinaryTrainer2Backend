@@ -18,7 +18,6 @@ from src.services.email_templates import (
     render_security_notification,
     render_username_changed,
 )
-from src.services.rate_limit_service import RateLimitService
 from src.services.security_notification_service import (
     SecurityNotificationService,
     _validate_email,
@@ -318,7 +317,6 @@ async def test_email_service_failure_is_swallowed(db_session, test_user):
 async def test_audit_service_wrapper_dispatches_notification(db_session, test_user):
     """send_security_notification delegates to SecurityNotificationService."""
     from src.services.audit_service import send_security_notification
-    from src.services.email_wiring import get_email_service
 
     # Install a mock email service
     mock_email = MockEmailService()
@@ -344,8 +342,8 @@ async def test_audit_service_wrapper_dispatches_notification(db_session, test_us
 @pytest.mark.asyncio
 async def test_audit_service_wrapper_with_metadata(db_session, test_user):
     """send_security_notification passes metadata to the notification service."""
-    from src.services.audit_service import send_security_notification
     from src.services import email_wiring
+    from src.services.audit_service import send_security_notification
 
     mock_email = MockEmailService()
     original = email_wiring._default_service
