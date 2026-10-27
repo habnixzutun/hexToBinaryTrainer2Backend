@@ -13,7 +13,7 @@ from src.database.engine import Base, get_db
 from src.main import app
 from src.models.auth import PasswordResetToken, User, UserIdentity, UserRefreshToken
 from src.services.email_service import MockEmailService
-from src.utils.jwt_utils import JWT_ALGORITHM, JWT_SECRET
+from src.utils.jwt_utils import JWT_ALGORITHM, get_jwt_secret
 from src.utils.password import hash_password
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
@@ -92,7 +92,7 @@ def _make_expired_reset_token(user_id: str) -> str:
         "exp": datetime.now(UTC) - timedelta(hours=1),
         "iat": datetime.now(UTC) - timedelta(hours=2),
     }
-    return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return pyjwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
 # ---------------------------------------------------------------------------

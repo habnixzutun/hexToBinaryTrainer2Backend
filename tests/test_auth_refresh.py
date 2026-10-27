@@ -46,18 +46,31 @@ def _hash_token(token: str) -> str:
 
 
 @pytest.fixture(autouse=True)
-def reset_rate_limiter():
-    """Clear slowapi in-memory storage between tests to prevent bleed-over.
+async def reset_rate_limiter():
+    """Clear DB-based rate limit storage between tests to prevent bleed-over.
 
     Multiple tests in this file call /login, which is rate-limited to 5/min.
     Without resetting the limiter between tests, later tests hit the budget
     consumed by earlier ones and fail with misleading 429 errors.
     """
-    from src.routers.auth import limiter as _limiter
+    from sqlalchemy import delete
 
-    _limiter.reset()
+    from src.models.auth import RateLimitAttempt
+
+    # Get the engine from the test setup
+    eng = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async with eng.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    async_session = sessionmaker(eng, class_=AsyncSession, expire_on_commit=False)
+    async with async_session() as session:
+        await session.execute(delete(RateLimitAttempt))
+        await session.commit()
     yield
-    _limiter.reset()
+    async with async_session() as session:
+        await session.execute(delete(RateLimitAttempt))
+        await session.commit()
+    await eng.dispose()
 
 
 @pytest.fixture

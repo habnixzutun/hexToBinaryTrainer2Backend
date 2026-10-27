@@ -138,7 +138,6 @@ async def refresh(
     request: Request,
     response: Response,
     session: AsyncSession = Depends(get_db),
-    email_service: EmailService = Depends(get_email_service),
 ) -> RefreshResponse:
     refresh_token = request.cookies.get(COOKIE_NAME)
     if not refresh_token:
@@ -150,7 +149,6 @@ async def refresh(
             refresh_token=refresh_token,
             ip_address=request.client.host if request.client else None,
             user_agent=request.headers.get("user-agent"),
-            email_service=email_service,
         )
     except ValueError as exc:
         if str(exc) == "replay_detected":
@@ -467,7 +465,6 @@ async def reset_password(
     request: Request,
     body: ResetPasswordRequest,
     session: AsyncSession = Depends(get_db),
-    email_service: EmailService = Depends(get_email_service),
 ) -> dict:
     strength_errors = validate_password_strength(body.new_password)
     if strength_errors:
@@ -481,9 +478,6 @@ async def reset_password(
             session=session,
             raw_token=body.token,
             new_password=body.new_password,
-            email_service=email_service,
-            ip_address=request.client.host if request.client else None,
-            user_agent=request.headers.get("user-agent"),
         )
     except ValueError as exc:
         reason = str(exc)

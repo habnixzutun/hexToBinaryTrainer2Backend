@@ -31,7 +31,7 @@ from src.utils.email_change_token import (
 from src.utils.jwt_utils import (
     EMAIL_CHANGE_TOKEN_TTL_HOURS,
     JWT_ALGORITHM,
-    JWT_SECRET,
+    get_jwt_secret,
 )
 
 USER_ID = "user-us07-001"
@@ -58,7 +58,7 @@ def _build_encrypted_jwt(payload: dict) -> str:
     """
     fernet_key = _fernet_key()
     jwt_bytes = pyjwt.encode(
-        payload, JWT_SECRET, algorithm=JWT_ALGORITHM
+        payload, get_jwt_secret(), algorithm=JWT_ALGORITHM
     ).encode("utf-8")
     return Fernet(fernet_key).encrypt(jwt_bytes).decode("utf-8")
 
@@ -183,7 +183,7 @@ class TestEmailChangeTokenInvalid:
             "iat": datetime.now(UTC),
         }
         plain_jwt = pyjwt.encode(
-            payload, JWT_SECRET, algorithm=JWT_ALGORITHM
+            payload, get_jwt_secret(), algorithm=JWT_ALGORITHM
         )
         with pytest.raises(ValueError) as exc_info:
             verify_email_change_token(plain_jwt)
@@ -218,7 +218,7 @@ class TestEmailChangeTokenInvalid:
             "iat": datetime.now(UTC),
         }
         jwt_bytes = pyjwt.encode(
-            payload, JWT_SECRET, algorithm=JWT_ALGORITHM
+            payload, get_jwt_secret(), algorithm=JWT_ALGORITHM
         ).encode("utf-8")
         token = Fernet(other_fernet_key).encrypt(jwt_bytes).decode("utf-8")
 

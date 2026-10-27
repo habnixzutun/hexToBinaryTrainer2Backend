@@ -24,7 +24,7 @@ from src.config import get_settings
 from src.utils.jwt_utils import (
     EMAIL_CHANGE_TOKEN_TTL_HOURS,
     JWT_ALGORITHM,
-    JWT_SECRET,
+    get_jwt_secret,
 )
 
 
@@ -55,7 +55,7 @@ def create_email_change_token(user_id: str, new_email: str) -> str:
         "iat": datetime.now(UTC),
     }
     jwt_bytes = jwt.encode(
-        payload, JWT_SECRET, algorithm=JWT_ALGORITHM
+        payload, get_jwt_secret(), algorithm=JWT_ALGORITHM
     ).encode("utf-8")
     fernet = Fernet(_fernet_key())
     return fernet.encrypt(jwt_bytes).decode("utf-8")
@@ -88,7 +88,7 @@ def verify_email_change_token(token: str) -> dict:
 
     try:
         payload = jwt.decode(
-            jwt_bytes, JWT_SECRET, algorithms=[JWT_ALGORITHM]
+            jwt_bytes, get_jwt_secret(), algorithms=[JWT_ALGORITHM]
         )
     except jwt.ExpiredSignatureError as exc:
         raise ValueError("expired") from exc

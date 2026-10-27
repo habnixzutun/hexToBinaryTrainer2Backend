@@ -304,10 +304,8 @@ class TestAntiEnumeration:
         The (status, message) distribution must carry zero bits about which
         of the 100 entries were already registered.
         """
-        # The in-memory IP rate limiter (replaced in US-04) is stubbed out so
-        # the 100 probes are not answered with 429; this isolates the
-        # enumeration-relevant work of the endpoint.
-        monkeypatch.setattr("src.routers.auth._check_rate_limit", lambda ip: None)
+        # US-04: DB-based rate limiting is cleared by the clear_rate_limit fixture.
+        # No need to monkeypatch anymore.
 
         for i in range(30):
             session.add(
@@ -357,8 +355,7 @@ class TestAntiEnumeration:
         bcrypt hash in the endpoint), so the timing delta collapses to the
         extra DB writes of the fresh path.
         """
-        # Same rationale as in the dictionary test: stub the IP limiter.
-        monkeypatch.setattr("src.routers.auth._check_rate_limit", lambda ip: None)
+        # US-04: DB-based rate limiting is cleared by the clear_rate_limit fixture.
 
         seed = await client.post("/api/auth/register", json=VALID_PAYLOAD)
         assert seed.status_code == 201

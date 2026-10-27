@@ -28,6 +28,14 @@ class EmailService(Protocol):
         self, to_email: str, action: str
     ) -> None: ...
 
+    async def send_raw_email(
+        self,
+        to_email: str,
+        subject: str,
+        html_body: str,
+        context: dict | None = None,
+    ) -> None: ...
+
 
 class MockEmailService:
     """In-memory email service for testing and development."""
@@ -51,6 +59,23 @@ class MockEmailService:
     ) -> None:
         self.sent.append(
             {"to": to_email, "action": action, "type": "security_notification"}
+        )
+
+    async def send_raw_email(
+        self,
+        to_email: str,
+        subject: str,
+        html_body: str,
+        context: dict | None = None,
+    ) -> None:
+        self.sent.append(
+            {
+                "to": to_email,
+                "subject": subject,
+                "html_body": html_body,
+                "context": context or {},
+                "type": "raw",
+            }
         )
 
 
@@ -149,3 +174,14 @@ class SMTPEmailService:
     ) -> None:
         html, plain_text = build_security_notification(action)
         await self._send(to_email, "Security notification", html, plain_text)
+
+    async def send_raw_email(
+        self,
+        to_email: str,
+        subject: str,
+        html_body: str,
+        context: dict | None = None,
+    ) -> None:
+        # For raw emails, we only have HTML. Create a minimal plain text fallback.
+        plain_text = f"Please view this email in an HTML-capable client.\n\n{subject}"
+        await self._send(to_email, subject, html_body, plain_text)
