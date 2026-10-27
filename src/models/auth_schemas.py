@@ -19,6 +19,6 @@ class VerifyEmailRequest(BaseModel):
 
 
 class ResendVerificationRequest(BaseModel):
-    """US-04: Request body for resending verification email."""
+    """US-08: Request body for resending verification email."""
 
     email: EmailStr

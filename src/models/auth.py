@@ -184,3 +184,24 @@ class UserAuditLog(Base):
     __table_args__ = (
         Index("ix_user_audit_log_user_timestamp", "user_id", "timestamp"),
     )
+
+
+class RateLimitAttempt(Base):
+    """US-04: Persistent rate limiting (ADR 001: DB instead of Redis).
+
+    Tracks rate limit attempts by key (e.g., 'register:ip:email').
+    Entries are cleaned up when they expire.
+    """
+
+    __tablename__ = "rate_limit_attempt"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid7()))
+    key = Column(String(255), nullable=False, index=True)
+    created_at = Column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP")
+    )
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("ix_rate_limit_attempt_key_expires", "key", "expires_at"),
+    )
