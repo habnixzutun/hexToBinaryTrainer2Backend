@@ -2,7 +2,7 @@ import os
 from functools import lru_cache
 from typing import Any
 
-from pydantic import SecretStr, ValidationError, model_validator
+from pydantic import SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,6 +33,23 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
 
     jwt_secret: SecretStr = SecretStr("")
+
+    # US-07: key used to derive the Fernet key that encrypts email-change
+    # tokens. Must be at least 32 chars of entropy so the derived 256-bit
+    # key is not trivially brute-forceable. The default value is only safe
+    # for the test suite; production deployments MUST set EMAIL_CHANGE_KEY.
+    email_change_key: SecretStr = SecretStr(
+        "test-email-change-key-must-be-32-chars-min"
+    )
+
+    @field_validator("email_change_key")
+    @classmethod
+    def _validate_email_change_key(cls, value: SecretStr) -> SecretStr:
+        if len(value.get_secret_value()) < 32:
+            raise ValueError(
+                "email_change_key must be at least 32 characters long"
+            )
+        return value
 
     @model_validator(mode="after")
     def _validate_smtp(self) -> "Settings":

@@ -10,11 +10,11 @@ from sqlalchemy.orm import sessionmaker
 from src.database.engine import Base, get_db
 from src.main import app
 from src.models.auth import User, UserIdentity
+from src.utils.email_change_token import create_email_change_token
 from src.utils.jwt_utils import (
     JWT_ALGORITHM,
     JWT_SECRET,
     create_access_token,
-    create_email_change_token,
 )
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"

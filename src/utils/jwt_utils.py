@@ -65,15 +65,9 @@ def create_password_reset_token(user_id: str) -> str:
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
-def create_email_change_token(user_id: str, new_email: str) -> str:
-    payload = {
-        "sub": user_id,
-        "type": "email_change",
-        "new_email": new_email,
-        "exp": datetime.now(UTC) + timedelta(hours=EMAIL_CHANGE_TOKEN_TTL_HOURS),
-        "iat": datetime.now(UTC),
-    }
-    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
+# create_email_change_token moved to src/utils/email_change_token.py (US-07).
+# Email-change tokens are now Fernet-encrypted so the new email address is
+# not visible in the clear inside the JWT.
 
 
 def decode_token(token: str) -> dict:
