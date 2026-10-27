@@ -13,9 +13,9 @@ from src.models.auth import User, UserIdentity
 from src.models.game import UserStats
 from src.utils.jwt_utils import (
     JWT_ALGORITHM,
-    JWT_SECRET,
     create_access_token,
     create_refresh_token,
+    get_jwt_secret,
 )
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
@@ -153,7 +153,7 @@ async def test_me_rejects_expired_token(client):
         "exp": datetime.now(UTC).timestamp() - 60,
         "iat": datetime.now(UTC).timestamp() - 1200,
     }
-    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    token = jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
     resp = await client.get(
         "/api/user/me", headers={"Authorization": f"Bearer {token}"}
     )

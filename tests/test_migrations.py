@@ -13,12 +13,18 @@ The migration_engine / migration_session fixtures live in conftest.py
 schema before each test for full isolation.
 """
 
+import pytest
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import IntegrityError
 from src.migrations.v001_auth_schema import (
     create_migrations_table,
     migration_already_applied,
     run_migration,
 )
+from src.migrations.v003_rate_limit import (
+    migration_already_applied as v003_already_applied,
+)
+from src.migrations.v003_rate_limit import run_migration as run_v003
 
 
 def get_table_names(sync_conn):
@@ -325,3 +331,57 @@ async def test_migration_cascade_delete(migration_engine, migration_session):
     )
     count = result.scalar()
     assert count == 0  # Identity should be deleted due to CASCADE
+
+
+# ---------------------------------------------------------------------------
+# US-04: v003_rate_limit — persistent rate-limit store (ADR 001: DB, no Redis)
+# ---------------------------------------------------------------------------
+
+
+async def test_v003_creates_rate_limit_attempt_table(
+    migration_engine, migration_session
+):
+    """v003 creates the table RateLimitService writes its counters to."""
+    await create_migrations_table(migration_session)
+    await run_v003(migration_session)
+
+    async with migration_engine.connect() as conn:
+        tables = await conn.run_sync(get_table_names)
+        assert "rate_limit_attempt" in tables
+
+        columns = await conn.run_sync(get_columns, "rate_limit_attempt")
+        assert {"id", "key", "created_at", "expires_at"} <= set(columns)
+
+        # The composite index backs both the per-key count and the TTL sweep.
+        indexes = await conn.run_sync(get_indexes, "rate_limit_attempt")
+        assert "ix_rate_limit_attempt_key_expires" in indexes
+
+
+async def test_v003_requires_expires_at(migration_session):
+    """expires_at is NOT NULL: a row without a TTL could never be cleaned up."""
+    await create_migrations_table(migration_session)
+    await run_v003(migration_session)
+
+    with pytest.raises(IntegrityError):
+        await migration_session.execute(
+            text("INSERT INTO rate_limit_attempt (id, key) VALUES ('rl-1', 'k')")
+        )
+        await migration_session.commit()
+
+
+async def test_v003_is_tracked_and_idempotent(migration_session):
+    """v003 records its version and a second run is a no-op (startup re-runs it)."""
+    await create_migrations_table(migration_session)
+
+    assert await v003_already_applied(migration_session) is False
+
+    await run_v003(migration_session)
+    assert await v003_already_applied(migration_session) is True
+
+    # lifespan calls every migration on every boot — must not raise a second time
+    await run_v003(migration_session)
+
+    result = await migration_session.execute(
+        text("SELECT COUNT(*) FROM schema_migrations WHERE version = 'v003_rate_limit'")
+    )
+    assert result.scalar() == 1

@@ -10,11 +10,11 @@ from sqlalchemy.orm import sessionmaker
 from src.database.engine import Base, get_db
 from src.main import app
 from src.models.auth import User, UserIdentity
+from src.utils.email_change_token import create_email_change_token
 from src.utils.jwt_utils import (
     JWT_ALGORITHM,
-    JWT_SECRET,
     create_access_token,
-    create_email_change_token,
+    get_jwt_secret,
 )
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
@@ -94,7 +94,7 @@ def _expired_bearer() -> dict:
         "exp": datetime.now(UTC) - timedelta(minutes=1),
         "iat": datetime.now(UTC) - timedelta(minutes=16),
     }
-    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    token = jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -202,7 +202,7 @@ async def test_verify_email_change_expired_token_returns_400(client):
         "exp": datetime.now(UTC) - timedelta(hours=1),
         "iat": datetime.now(UTC) - timedelta(hours=25),
     }
-    expired_token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    expired_token = jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
     response = await client.post(
         "/api/auth/verify-email-change",

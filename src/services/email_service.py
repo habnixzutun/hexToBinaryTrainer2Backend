@@ -3,8 +3,16 @@
 import asyncio
 import smtplib
 import ssl
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Protocol
+
+from src.services.email_templates import (
+    build_email_change_verification,
+    build_password_reset_email,
+    build_security_notification,
+    build_verification_email,
+)
 
 SMTP_TIMEOUT_SECONDS = 10
 IMPLICIT_SSL_PORT = 465
@@ -18,6 +26,14 @@ class EmailService(Protocol):
     ) -> None: ...
     async def send_security_notification_email(
         self, to_email: str, action: str
+    ) -> None: ...
+
+    async def send_raw_email(
+        self,
+        to_email: str,
+        subject: str,
+        html_body: str,
+        context: dict | None = None,
     ) -> None: ...
 
 
@@ -45,6 +61,23 @@ class MockEmailService:
             {"to": to_email, "action": action, "type": "security_notification"}
         )
 
+    async def send_raw_email(
+        self,
+        to_email: str,
+        subject: str,
+        html_body: str,
+        context: dict | None = None,
+    ) -> None:
+        self.sent.append(
+            {
+                "to": to_email,
+                "subject": subject,
+                "html_body": html_body,
+                "context": context or {},
+                "type": "raw",
+            }
+        )
+
 
 class SMTPEmailService:
     """SMTP-backed email service for production.
@@ -70,11 +103,20 @@ class SMTPEmailService:
         self._from = from_address
         self._base_url = base_url
 
-    def _send_sync(self, to_email: str, subject: str, body: str) -> None:
-        msg = MIMEText(body)
+    def _send_sync(
+        self, to_email: str, subject: str, html: str, plain_text: str
+    ) -> None:
+        """Send a ``multipart/alternative`` email (HTML + plain-text fallback).
+
+        Email clients that can render HTML show the styled template; clients
+        that strip HTML fall back to the plain-text part.
+        """
+        msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
         msg["From"] = self._from
         msg["To"] = to_email
+        msg.attach(MIMEText(plain_text, "plain", "utf-8"))
+        msg.attach(MIMEText(html, "html", "utf-8"))
 
         with self._connect() as smtp:
             if self._port != IMPLICIT_SSL_PORT:
@@ -100,41 +142,46 @@ class SMTPEmailService:
             )
         return smtplib.SMTP(self._host, self._port, timeout=SMTP_TIMEOUT_SECONDS)
 
-    async def _send(self, to_email: str, subject: str, body: str) -> None:
+    async def _send(
+        self, to_email: str, subject: str, html: str, plain_text: str
+    ) -> None:
         await asyncio.wait_for(
-            asyncio.to_thread(self._send_sync, to_email, subject, body),
+            asyncio.to_thread(
+                self._send_sync, to_email, subject, html, plain_text
+            ),
             timeout=SMTP_TIMEOUT_SECONDS * 2,
         )
 
     async def send_verification_email(self, to_email: str, token: str) -> None:
         verify_url = f"{self._base_url}/verify-email?token={token}"
-        await self._send(
-            to_email,
-            "Verify your email",
-            f"Click here to verify your email: {verify_url}",
-        )
+        html, plain_text = build_verification_email(verify_url)
+        await self._send(to_email, "Verify your email", html, plain_text)
 
     async def send_password_reset_email(self, to_email: str, token: str) -> None:
         reset_url = f"{self._base_url}/reset-password?token={token}"
-        await self._send(
-            to_email,
-            "Reset your password",
-            f"Click here to reset your password: {reset_url}",
-        )
+        html, plain_text = build_password_reset_email(reset_url)
+        await self._send(to_email, "Reset your password", html, plain_text)
 
     async def send_email_change_verification(self, to_email: str, token: str) -> None:
         verify_url = f"{self._base_url}/verify-email-change?token={token}"
+        html, plain_text = build_email_change_verification(verify_url)
         await self._send(
-            to_email,
-            "Confirm your new email address",
-            f"Click here to confirm your new email address: {verify_url}",
+            to_email, "Confirm your new email address", html, plain_text
         )
 
     async def send_security_notification_email(
         self, to_email: str, action: str
     ) -> None:
-        await self._send(
-            to_email,
-            "Security notification",
-            f"A security-relevant action was performed on your account: {action}",
-        )
+        html, plain_text = build_security_notification(action)
+        await self._send(to_email, "Security notification", html, plain_text)
+
+    async def send_raw_email(
+        self,
+        to_email: str,
+        subject: str,
+        html_body: str,
+        context: dict | None = None,
+    ) -> None:
+        # For raw emails, we only have HTML. Create a minimal plain text fallback.
+        plain_text = f"Please view this email in an HTML-capable client.\n\n{subject}"
+        await self._send(to_email, subject, html_body, plain_text)

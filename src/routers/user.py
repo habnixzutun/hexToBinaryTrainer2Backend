@@ -14,7 +14,11 @@ from src.models.game import UserStats
 from src.services.audit_service import log_audit_action, send_security_notification
 from src.services.email_service import EmailService, MockEmailService
 from src.services.user_service import change_password
-from src.utils.jwt_utils import create_email_change_token, decode_token
+from src.utils.email_change_token import (
+    create_email_change_token,
+    verify_email_change_token,
+)
+from src.utils.jwt_utils import decode_token
 
 USERNAME_CHANGE_COOLDOWN_DAYS = 7
 
@@ -158,24 +162,23 @@ async def verify_email_change(
     session: AsyncSession = Depends(get_db),
     email_service: EmailService = Depends(get_email_service),
 ) -> dict:
+    # US-07: tokens are Fernet-encrypted; new_email is not visible in the
+    # clear until decrypted. verify_email_change_token raises ValueError
+    # with a machine-readable reason ("expired", "invalid token",
+    # "invalid token type") that we map to user-facing messages.
     try:
-        payload = decode_token(body.token)
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Token has expired.",
-        ) from None
-    except jwt.InvalidTokenError:
+        payload = verify_email_change_token(body.token)
+    except ValueError as exc:
+        reason = str(exc)
+        if reason == "expired":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Token has expired.",
+            ) from None
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid token.",
         ) from None
-
-    if payload.get("type") != "email_change":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid token type.",
-        )
 
     user_id: str = payload["sub"]
     new_email: str = payload["new_email"]

@@ -4,11 +4,12 @@ from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from src.database.engine import Base, get_db
 from src.main import app
-from src.models.auth import User, UserIdentity, UserRefreshToken
+from src.models.auth import RateLimitAttempt, User, UserIdentity, UserRefreshToken
 from src.utils.password import hash_password
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
@@ -21,12 +22,16 @@ RATE_LIMIT_EMAIL = "ratelimit-unique-14@example.com"
 
 
 @pytest.fixture(autouse=True)
-def reset_rate_limiter():
-    """Clear slowapi in-memory storage between tests to prevent bleed-over."""
-    from src.routers.auth import limiter as _limiter
-    _limiter.reset()
+async def reset_rate_limiter(engine):
+    """Clear database rate limit entries between tests to prevent bleed-over."""
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with async_session() as session:
+        await session.execute(delete(RateLimitAttempt))
+        await session.commit()
     yield
-    _limiter.reset()
+    async with async_session() as session:
+        await session.execute(delete(RateLimitAttempt))
+        await session.commit()
 
 
 @pytest.fixture

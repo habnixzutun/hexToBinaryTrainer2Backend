@@ -21,13 +21,11 @@ from src.config import get_settings
 from src.utils import jwt_utils
 from src.utils.jwt_utils import (
     ACCESS_TOKEN_TTL_MINUTES,
-    EMAIL_CHANGE_TOKEN_TTL_HOURS,
     JWT_ALGORITHM,
     PASSWORD_RESET_TOKEN_TTL_HOURS,
     REFRESH_TOKEN_TTL_DAYS,
     VERIFICATION_TOKEN_TTL_HOURS,
     create_access_token,
-    create_email_change_token,
     create_password_reset_token,
     create_refresh_token,
     create_verification_token,
@@ -183,15 +181,6 @@ class TestAccessTokenRoundTrip:
         assert payload["type"] == expected_type
         assert payload["sub"] == USER_ID
         assert payload["exp"] - payload["iat"] == ttl_seconds
-
-    def test_email_change_token_roundtrip(self):
-        token = create_email_change_token(USER_ID, "new@example.com")
-        payload = decode_token(token)
-
-        assert payload["type"] == "email_change"
-        assert payload["sub"] == USER_ID
-        assert payload["new_email"] == "new@example.com"
-        assert payload["exp"] - payload["iat"] == EMAIL_CHANGE_TOKEN_TTL_HOURS * 3600
 
 
 class TestTokenRejection:

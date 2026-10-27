@@ -200,8 +200,8 @@ async def test_change_password_expired_token_returns_401(client):
         "exp": datetime(2000, 1, 1, tzinfo=UTC),
         "iat": datetime(1999, 1, 1, tzinfo=UTC),
     }
-    from src.utils.jwt_utils import JWT_ALGORITHM, JWT_SECRET
-    expired_token = pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    from src.utils.jwt_utils import JWT_ALGORITHM, get_jwt_secret
+    expired_token = pyjwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
     response = await client.post(
         "/api/user/change-password",

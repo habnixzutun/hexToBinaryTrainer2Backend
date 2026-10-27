@@ -193,19 +193,36 @@ class TestRegister:
         response = await client.post("/api/auth/register", json=payload)
         assert response.status_code == 400
 
-    async def test_rate_limit_returns_429_after_three_attempts(self, client):
-        payloads = [
-            {
-                "email": f"user{i}@example.com",
-                "username": f"user{i}",
-                "password": "StrongPass1!",
-            }
-            for i in range(4)
-        ]
-        for i in range(3):
-            await client.post("/api/auth/register", json=payloads[i])
-        response = await client.post("/api/auth/register", json=payloads[3])
-        assert response.status_code == 429
+    async def test_rate_limit_returns_429_after_three_attempts(
+        self, client, async_engine
+    ):
+        """Rate limit is per IP+email. Test via service directly."""
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from src.services.rate_limit_service import RateLimitService
+
+        factory = sessionmaker(
+            async_engine, class_=AsyncSession, expire_on_commit=False
+        )
+        async with factory() as session:
+            rate_limit = RateLimitService(session)
+
+            # Simulate 3 registration attempts with same IP+email
+            for _ in range(3):
+                await rate_limit.check(
+                    "register:testclient:user@example.com",
+                    limit=3,
+                    window_seconds=3600,
+                )
+
+            # 4th attempt should be blocked
+            is_allowed = await rate_limit.check(
+                "register:testclient:user@example.com",
+                limit=3,
+                window_seconds=3600,
+            )
+            assert is_allowed is False
 
     async def test_invalid_email_format_returns_422(self, client):
         payload = {**VALID_PAYLOAD, "email": "not-an-email"}
@@ -287,10 +304,8 @@ class TestAntiEnumeration:
         The (status, message) distribution must carry zero bits about which
         of the 100 entries were already registered.
         """
-        # The in-memory IP rate limiter (replaced in US-04) is stubbed out so
-        # the 100 probes are not answered with 429; this isolates the
-        # enumeration-relevant work of the endpoint.
-        monkeypatch.setattr("src.routers.auth._check_rate_limit", lambda ip: None)
+        # US-04: DB-based rate limiting is cleared by the clear_rate_limit fixture.
+        # No need to monkeypatch anymore.
 
         for i in range(30):
             session.add(
@@ -340,8 +355,7 @@ class TestAntiEnumeration:
         bcrypt hash in the endpoint), so the timing delta collapses to the
         extra DB writes of the fresh path.
         """
-        # Same rationale as in the dictionary test: stub the IP limiter.
-        monkeypatch.setattr("src.routers.auth._check_rate_limit", lambda ip: None)
+        # US-04: DB-based rate limiting is cleared by the clear_rate_limit fixture.
 
         seed = await client.post("/api/auth/register", json=VALID_PAYLOAD)
         assert seed.status_code == 201

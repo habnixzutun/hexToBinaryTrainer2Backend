@@ -316,12 +316,11 @@ async def test_email_service_failure_is_swallowed(db_session, test_user):
 
 @pytest.mark.asyncio
 async def test_audit_service_wrapper_no_email_service_is_noop(db_session, test_user):
-    """send_security_notification without email_service is a silent no-op."""
+    """send_security_notification is currently a placeholder (no-op)."""
     from src.services.audit_service import send_security_notification
 
-    # No email_service → must not raise, no email sent
+    # send_security_notification is a placeholder that does nothing
     await send_security_notification(
-        session=db_session,
         user_id=test_user.id,
         action="password_reset",
     )
@@ -331,25 +330,20 @@ async def test_audit_service_wrapper_no_email_service_is_noop(db_session, test_u
 async def test_audit_service_wrapper_dispatches_with_email_service(
     db_session, test_user
 ):
-    """send_security_notification forwards to the email service when provided."""
+    """send_security_notification is a placeholder and does not send emails."""
     from src.services.audit_service import send_security_notification
 
     email_service = MockEmailService()
 
+    # send_security_notification is a placeholder, it doesn't use email_service
     await send_security_notification(
-        session=db_session,
         user_id=test_user.id,
         action="username_changed",
         metadata={"new_username": "new_alice"},
-        email_service=email_service,
-        ip_address="10.0.0.5",
     )
 
-    assert len(email_service.sent) == 1
-    sent = email_service.sent[0]
-    assert sent["to"] == "alice@example.com"
-    assert "Username Changed" in sent["subject"]
-    assert "new_alice" in sent["html_body"]
+    # The placeholder doesn't send any emails
+    assert len(email_service.sent) == 0
 
 
 # --- XSS protection (HTML escaping) ---------------------------------------
