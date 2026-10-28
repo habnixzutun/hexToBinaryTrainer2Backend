@@ -6,18 +6,27 @@ Tests progressive lockout for /login endpoint:
 - 20 failures → 15 minute lockout
 - Successful login resets counter
 - Different IPs have separate counters
+- Lockout expiry, and the Wave 2a B-1 rule that expiry comes from the ``created_at``
+  window while the physical rows are reclaimed ONLY by the periodic sweep
+  (``purge_expired_attempts``) — never by a ``DELETE`` inside ``check_login_lockout``
 """
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from src.database.engine import Base
 from src.models.auth import RateLimitAttempt
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
+
+# How far past a tier's boundary the aged rows are pushed. One second is enough to
+# make "past the window" unambiguous against wall-clock jitter inside a test run.
+EXPIRY_GRACE_SECONDS = 1
 
 
 @pytest.fixture
@@ -39,6 +48,72 @@ async def session(async_engine):
         await s.rollback()
 
 
+@contextmanager
+def _write_log(engine) -> Iterator[list[str]]:
+    """Every write statement (``INSERT``/``UPDATE``/``DELETE``) inside the block.
+
+    Deliberately narrower than the full statement log
+    ``tests/test_rate_limit.py`` builds for its ordering claims: the lockout
+    guarantee (Wave 2a B-1) is a *negative* one — ``check_login_lockout`` must issue
+    no ``DELETE`` — so only writes are interesting here, and the tier counts remain
+    the ``SELECT`` reads the function is supposed to do.
+    """
+    writes: list[str] = []
+
+    def _capture(sync_conn, cursor, statement, *args, **kwargs) -> None:
+        verb = statement.strip().split(maxsplit=1)[0].upper()
+        if verb in {"INSERT", "UPDATE", "DELETE"}:
+            writes.append(" ".join(statement.split()))
+
+    event.listen(engine.sync_engine, "before_cursor_execute", _capture)
+    try:
+        yield writes
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _capture)
+
+
+async def _row_count(session: AsyncSession, key_pattern: str) -> int:
+    """How many rate-limit rows a key pattern still holds, counted in SQL."""
+    return (
+        await session.scalar(
+            select(func.count())
+            .select_from(RateLimitAttempt)
+            .where(RateLimitAttempt.key.like(key_pattern))
+        )
+        or 0
+    )
+
+
+async def _expire_tier(
+    session: AsyncSession, key_prefix: str, *, window_seconds: int
+) -> None:
+    """Age one tier's rows so its window has really elapsed (B-1 semantics).
+
+    Both clocks move, because that is what real ageing does — and they are read by
+    two different owners: ``created_at`` leaves the tier's counting window, which is
+    what :func:`src.utils.login_lockout.check_login_lockout` decides on, and
+    ``expires_at`` crosses into the past, which is the predicate
+    :func:`src.services.rate_limit_service.purge_expired_attempts` reclaims rows by.
+    Setting only ``expires_at`` (as the pre-B-1 tests did) changes no verdict,
+    because the check never looked at that column.
+
+    A bulk ``UPDATE`` rather than loaded instances, because ``created_at`` is a
+    ``server_default`` column: reading it back off the identity map after the
+    inserting ``COMMIT`` would lazy-load inside the async context.
+    """
+    moment = datetime.now(UTC)
+    await session.execute(
+        update(RateLimitAttempt)
+        .where(RateLimitAttempt.key.like(f"{key_prefix}%"))
+        .values(
+            created_at=moment
+            - timedelta(seconds=window_seconds + EXPIRY_GRACE_SECONDS),
+            expires_at=moment - timedelta(seconds=EXPIRY_GRACE_SECONDS),
+        )
+    )
+    await session.commit()
+
+
 class TestLoginLockoutUtility:
     """Unit tests for login lockout utility functions."""
 
@@ -51,9 +126,7 @@ class TestLoginLockoutUtility:
         is_allowed = await check_login_lockout("192.168.1.1", session)
         assert is_allowed is True
 
-    async def test_check_login_lockout_allows_4_failures(
-        self, session: AsyncSession
-    ):
+    async def test_check_login_lockout_allows_4_failures(self, session: AsyncSession):
         """First 4 failures should be allowed (under 5 threshold)."""
         from src.utils.login_lockout import check_login_lockout, record_login_failure
 
@@ -115,9 +188,7 @@ class TestLoginLockoutUtility:
         is_allowed = await check_login_lockout(ip, session)
         assert is_allowed is False
 
-    async def test_reset_login_lockout_clears_all_counters(
-        self, session: AsyncSession
-    ):
+    async def test_reset_login_lockout_clears_all_counters(self, session: AsyncSession):
         """Reset should clear all lockout counters for an IP."""
         from src.utils.login_lockout import (
             check_login_lockout,
@@ -142,9 +213,7 @@ class TestLoginLockoutUtility:
         is_allowed = await check_login_lockout(ip, session)
         assert is_allowed is True
 
-    async def test_different_ips_have_separate_counters(
-        self, session: AsyncSession
-    ):
+    async def test_different_ips_have_separate_counters(self, session: AsyncSession):
         """Different IPs should have independent lockout counters."""
         from src.utils.login_lockout import check_login_lockout, record_login_failure
 
@@ -163,82 +232,130 @@ class TestLoginLockoutUtility:
         is_allowed_ip2 = await check_login_lockout(ip2, session)
         assert is_allowed_ip2 is True
 
-    async def test_lockout_1min_expires_after_window(
-        self, session: AsyncSession
+    async def test_check_login_lockout_issues_no_write(
+        self, session: AsyncSession, async_engine
     ):
-        """1-minute lockout should expire after 60 seconds."""
-        from src.utils.login_lockout import check_login_lockout, record_login_failure
+        """B-1: the lockout check is a pure read — it writes nothing at all.
+
+        It used to open with an unkeyed ``DELETE … WHERE expires_at < now``, on the
+        pre-authentication brute-force path where the attacker sets the request rate,
+        while US-32 lets ``answer:*`` rows accumulate between sweeps: the busier the
+        answer path made the table, the slower an unauthenticated login got. The
+        three tier counts decide everything from ``created_at``, so the delete was
+        pure cost. This pins the absence of the write, on both a locked and an
+        unlocked IP (the counts differ; the statement mix must not).
+        """
+        from src.utils.login_lockout import (
+            LOCKOUT_THRESHOLD_1MIN,
+            check_login_lockout,
+            record_login_failure,
+        )
+
+        ip = "192.168.1.99"
+        for _ in range(LOCKOUT_THRESHOLD_1MIN):  # -> locked on the 1-min tier
+            await record_login_failure(ip, session)
+
+        with _write_log(async_engine) as writes:
+            assert await check_login_lockout(ip, session) is False
+            assert await check_login_lockout("192.168.1.100", session) is True
+
+        assert not [w for w in writes if w.upper().startswith("DELETE")], writes
+        assert not [w for w in writes if w.upper().startswith(("INSERT", "UPDATE"))], (
+            writes
+        )
+
+    async def test_lockout_1min_expires_after_window(
+        self, session: AsyncSession, async_engine
+    ):
+        """1-minute lockout lapses when its window is past; the sweep takes the rows.
+
+        Two separate facts, both pinned here (Wave 2a B-1): the *verdict* comes from
+        the ``created_at`` window, and the *rows* are reclaimed only by
+        :func:`src.services.rate_limit_service.purge_expired_attempts` — a lockout
+        check leaves them physically on the table.
+        """
+        from src.services.rate_limit_service import purge_expired_attempts
+        from src.utils.login_lockout import (
+            LOCKOUT_DURATION_1MIN,
+            check_login_lockout,
+            record_login_failure,
+        )
 
         ip = "192.168.1.1"
 
-        # Record 5 failures
+        # Record 5 failures -> locked
         for _ in range(5):
             await record_login_failure(ip, session)
+        assert await check_login_lockout(ip, session) is False
 
-        # Should be blocked
-        is_allowed = await check_login_lockout(ip, session)
-        assert is_allowed is False
-
-        # Manually expire the 1-min lockout entries
-        result = await session.execute(
-            select(RateLimitAttempt).where(
-                RateLimitAttempt.key.like(f"login_lockout_1min:{ip}%")
-            )
+        await _expire_tier(
+            session,
+            f"login_lockout_1min:{ip}",
+            window_seconds=LOCKOUT_DURATION_1MIN,
         )
-        attempts = result.scalars().all()
-        for attempt in attempts:
-            attempt.expires_at = datetime.now(UTC) - timedelta(seconds=70)
-            session.add(attempt)
-        await session.commit()
 
-        # Now should be allowed again (expired entries cleaned up)
-        is_allowed = await check_login_lockout(ip, session)
-        assert is_allowed is True
+        # Window elapsed -> allowed, even though nothing was deleted to make it so
+        with _write_log(async_engine) as writes:
+            assert await check_login_lockout(ip, session) is True
+        assert not [w for w in writes if w.upper().startswith("DELETE")], writes
+
+        # The rows are still there — the check does not clean up behind itself
+        assert await _row_count(session, f"login_lockout_1min:{ip}%") == 5
+
+        # The sweep is the reclaimer: exactly the 5 aged rows, shorter tier untouched
+        assert await purge_expired_attempts(session) == 5
+        assert await _row_count(session, f"login_lockout_1min:{ip}%") == 0
+        assert await _row_count(session, f"login_lockout_5min:{ip}%") == 5
+        assert await _row_count(session, f"login_lockout_15min:{ip}%") == 5
 
     async def test_lockout_5min_expires_after_window(
-        self, session: AsyncSession
+        self, session: AsyncSession, async_engine
     ):
-        """5-minute lockout should expire after 300 seconds."""
-        from src.utils.login_lockout import check_login_lockout, record_login_failure
+        """5-minute lockout lapses only once the shorter tiers lapse too.
+
+        Ten failures trip every tier at once, so the 5-min tier alone expiring must
+        NOT unlock the IP — the 1-min tier still sees 10 rows inside its window. The
+        rows of the lapsed tiers stay on the table until the sweep collects them.
+        """
+        from src.services.rate_limit_service import purge_expired_attempts
+        from src.utils.login_lockout import (
+            LOCKOUT_DURATION_1MIN,
+            LOCKOUT_DURATION_5MIN,
+            check_login_lockout,
+            record_login_failure,
+        )
 
         ip = "192.168.1.1"
 
-        # Record 10 failures
+        # Record 10 failures -> locked on the 1-min and 5-min tiers
         for _ in range(10):
             await record_login_failure(ip, session)
+        assert await check_login_lockout(ip, session) is False
 
-        # Should be blocked
-        is_allowed = await check_login_lockout(ip, session)
-        assert is_allowed is False
-
-        # Manually expire the 5-min lockout entries
-        result = await session.execute(
-            select(RateLimitAttempt).where(
-                RateLimitAttempt.key.like(f"login_lockout_5min:{ip}%")
-            )
+        # Only the 5-min tier lapses -> still locked, by the 1-min tier (10 >= 5)
+        await _expire_tier(
+            session,
+            f"login_lockout_5min:{ip}",
+            window_seconds=LOCKOUT_DURATION_5MIN,
         )
-        attempts = result.scalars().all()
-        for attempt in attempts:
-            attempt.expires_at = datetime.now(UTC) - timedelta(seconds=310)
-            session.add(attempt)
-        await session.commit()
+        assert await check_login_lockout(ip, session) is False
+        assert await _row_count(session, f"login_lockout_5min:{ip}%") == 10
 
-        # Should still be blocked by 1-min lockout (5 < 10)
-        # But if we also expire 1-min lockout...
-        result = await session.execute(
-            select(RateLimitAttempt).where(
-                RateLimitAttempt.key.like(f"login_lockout_1min:{ip}%")
-            )
+        # The shorter tier lapses too -> allowed, with nothing deleted to get there
+        await _expire_tier(
+            session,
+            f"login_lockout_1min:{ip}",
+            window_seconds=LOCKOUT_DURATION_1MIN,
         )
-        attempts = result.scalars().all()
-        for attempt in attempts:
-            attempt.expires_at = datetime.now(UTC) - timedelta(seconds=70)
-            session.add(attempt)
-        await session.commit()
+        with _write_log(async_engine) as writes:
+            assert await check_login_lockout(ip, session) is True
+        assert not [w for w in writes if w.upper().startswith("DELETE")], writes
 
-        # Now should be allowed
-        is_allowed = await check_login_lockout(ip, session)
-        assert is_allowed is True
+        # The sweep collects both lapsed tiers (20 rows), leaves the 15-min tier
+        assert await purge_expired_attempts(session) == 20
+        assert await _row_count(session, f"login_lockout_1min:{ip}%") == 0
+        assert await _row_count(session, f"login_lockout_5min:{ip}%") == 0
+        assert await _row_count(session, f"login_lockout_15min:{ip}%") == 10
 
     async def test_record_login_failure_creates_correct_keys(
         self, session: AsyncSession
@@ -338,9 +455,7 @@ class TestLoginLockoutIntegration:
         assert response.status_code == 429
         assert "locked out" in response.json()["detail"].lower()
 
-    async def test_successful_login_resets_lockout_counter(
-        self, client, async_engine
-    ):
+    async def test_successful_login_resets_lockout_counter(self, client, async_engine):
         """Successful login should reset the lockout counter."""
         from datetime import UTC, datetime
 

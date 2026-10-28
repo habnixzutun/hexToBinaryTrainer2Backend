@@ -34,6 +34,23 @@ async def check_login_lockout(ip_address: str, session: AsyncSession) -> bool:
     Checks if the IP is currently locked out based on failed login attempts.
     Uses progressive lockout durations: 1min, 5min, 15min.
 
+    Security (Wave 2a review, B-1): this function issues **no ``DELETE``**. It used
+    to start with an unkeyed ``DELETE … WHERE expires_at < now`` — a full scan of
+    ``rate_limit_attempt`` on the pre-authentication brute-force path, where an
+    attacker controls the request rate. The scan's cost is paid by every victim of a
+    locked-out IP, and its table is no longer kept small by the answer endpoint
+    (US-32 moved that cleanup to the startup + periodic sweep), so the purge was
+    cross-endpoint DoS amplification: the more ``answer:*`` rows the table holds, the
+    slower an unauthenticated ``POST /auth/login`` gets.
+
+    Removing it changes no verdict. Expiry is decided by the ``created_at`` window in
+    the three counts below — a row older than its tier's duration is not counted,
+    whether or not it still physically exists — and the physical rows are reclaimed by
+    :func:`src.services.rate_limit_service.purge_expired_attempts` on the same
+    ``expires_at`` boundary the tiers use. The keyed composite index
+    ``ix_rate_limit_attempt_key_expires`` serves the counts; it could never have
+    served an unkeyed ``expires_at`` scan.
+
     Args:
         ip_address: Client IP address
         session: AsyncSession for database operations
@@ -42,11 +59,6 @@ async def check_login_lockout(ip_address: str, session: AsyncSession) -> bool:
         True if login is allowed, False if locked out
     """
     now = datetime.now(UTC)
-
-    # Cleanup expired entries first
-    await session.execute(
-        delete(RateLimitAttempt).where(RateLimitAttempt.expires_at < now)
-    )
 
     # Check 15-minute lockout (highest threshold)
     key_15min = f"login_lockout_15min:{ip_address}"

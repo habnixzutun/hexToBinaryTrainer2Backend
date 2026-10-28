@@ -10,7 +10,15 @@ What is pinned here and consumed downstream:
 * :class:`AnswerRequest` — the ONLY body the answer endpoint accepts:
   ``{mode, bit_width, is_correct}``, extra fields forbidden (D-7). The server
   never trusts a client-computed XP/points/streak value, so there is no field
-  for one. ``bit_width`` is validated **per mode** and carries **bits in every
+  for one — but the trust boundary stops at the *verdict*: ``is_correct`` is the
+  client's own assertion and the server has **no oracle** to check it against
+  (no challenge nonce, no answer-history table). Every XP figure is then derived
+  faithfully from a premise the client chose, which is a Sprint-4 PO decision
+  (2026-10-27) recorded in ``docs/sprint4-plan.md`` (out-of-scope list and the
+  risk table), not an oversight of this schema; the 120/60 s rate limit is the
+  only mitigation, and it is a DoS control rather than an XP ceiling. Pinned by
+  ``tests/test_answer_endpoint.py::test_t01_is_correct_is_client_asserted_with_no_oracle``.
+  ``bit_width`` is validated **per mode** and carries **bits in every
   mode** (OQ-7): 4/8/16/32 for the conversion modes, 8/16/24/32 for ``unicode``
   — so ``("unicode", 4)`` is a 422 while ``("unicode", 8)`` is valid slot 1. The
   rule is driven by :data:`src.services.game_config.VALID_WIDTHS_BY_MODE`, never
@@ -32,11 +40,14 @@ frozen registry), so routers, tests and OpenAPI generation can all import it.
 
 from __future__ import annotations
 
+from typing import Final
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from src.services.game_config import VALID_WIDTHS_BY_MODE, GameMode
 
 __all__ = [
+    "ANSWER_PAYLOAD_BUDGET_BYTES",
     "AnswerRequest",
     "AnswerResponse",
     "LeaderboardEntryV2",
@@ -49,13 +60,29 @@ __all__ = [
 # Request (US-32 / D-7)
 # --------------------------------------------------------------------------- #
 
+# S-5 (Wave 2a review) — the ceiling on the REFUSAL, complementary to the 4 KiB
+# ceiling on the REQUEST in ``src/middleware/body_size.py``. Generous against the
+# largest legal body by far: every valid request is three short fields (mode <= 13
+# chars, bit_width <= 2 digits), so a legal body estimates well under 60 bytes and
+# no honest client can come near 256. What the number buys is a bound on the server's
+# own output: a refusal can no longer be made to echo a 3000-digit integer.
+ANSWER_PAYLOAD_BUDGET_BYTES: Final[int] = 256
+
+# The JSON skeleton of an answer body with every value removed, measured rather than
+# counted by hand so a future field cannot silently invalidate the budget arithmetic.
+_ANSWER_JSON_SKELETON_BYTES: Final[int] = len('{"mode":"","bit_width":,"is_correct":}')
+
 
 class AnswerRequest(BaseModel):
     """Body of ``POST /api/game/answer`` (US-33), validated per US-32.
 
     Exactly three fields: the client declares *what* it answered and *whether*
     it was right — every number the economy derives from that is the server's
-    (D-7: "server never trusts client-computed XP/points/streak").
+    (D-7: "server never trusts client-computed XP/points/streak"). The one thing
+    the server does take on trust is the verdict: ``is_correct`` has no
+    server-side oracle, which is the accepted risk T-01 of the Wave 2a security
+    review (PO decision 2026-10-27, ``docs/sprint4-plan.md``) and not an
+    oversight of this schema.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -81,9 +108,53 @@ class AnswerRequest(BaseModel):
         strict=True,
         description=(
             "Whether the player's answer was correct. Required, and strictly a "
-            "JSON boolean: no coercion of 0/1/'true'/'yes' on the XP write path."
+            "JSON boolean: no coercion of 0/1/'true'/'yes' on the XP write path. "
+            "This is the CLIENT'S VERDICT and the server has no way to check it "
+            "(no challenge nonce, no answer history) — the XP figures below are "
+            "derived faithfully from it, so an honest client is the whole trust "
+            "model. Accepted risk T-01, PO decision 2026-10-27: hardening is a "
+            "challenge-nonce/HMAC scheme parked for US-40 to file in "
+            "`docs/backlog.md`; the 120 answers / 60 s rate limit is the only "
+            "mitigation shipped, and it bounds request rate, not XP."
         ),
     )
+
+    @model_validator(mode="after")
+    def _validate_payload_budget(self) -> AnswerRequest:
+        """S-5 (Wave 2a review): bound what a refusal may say, whatever was sent.
+
+        ``ANSWER_BODY_LIMIT_BYTES`` bounds the request; this bounds the answer's own
+        text. The width rule below interpolates ``bit_width`` into its message, so a
+        legal-under-4-KiB body can carry a 3000-digit integer and make the server
+        print 3000 digits — a refusal larger than the request the client bothered to
+        send, and free outbound bandwidth for anyone ping-ponging it.
+
+        The estimate is the field values plus the fixed JSON skeleton, never the raw
+        body: whitespace padding is the middleware's business, and a body that is
+        legal-but-bulky must keep scoring (that is what the exactly-4096-bytes test
+        pins). Decimal digits never exceed an integer's bit length, so
+        :meth:`int.bit_length` bounds ``len(str(bit_width))`` without materialising a
+        3000-character string — exact enough to reject what it must, and integer-only
+        so the economy's D-8 rule has no float in sight here either.
+
+        Runs **before** :meth:`_validate_width_for_mode` because pydantic applies
+        ``mode="after"`` validators in definition order, and the budget is worthless
+        if the message it exists to suppress has already been built.
+        """
+        estimated = (
+            _ANSWER_JSON_SKELETON_BYTES
+            + len(self.mode)
+            + self.bit_width.bit_length()
+            + len("false")  # the longest rendering of the boolean
+        )
+        if estimated > ANSWER_PAYLOAD_BUDGET_BYTES:
+            # Deliberately names no field and reflects no value: the client already
+            # knows what it sent, and this message's job is to be small.
+            raise ValueError(
+                "answer payload exceeds the "
+                f"{ANSWER_PAYLOAD_BUDGET_BYTES}-byte budget for this endpoint"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_width_for_mode(self) -> AnswerRequest:

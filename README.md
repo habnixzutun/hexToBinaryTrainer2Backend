@@ -1032,7 +1032,13 @@ like 75 % when existing tests already exercised ~98 % of it).
   `main.py` 63 % (lifespan + HTML verification pages), `email_templates.py` 79 %
   (transactional builders), `migrations/v002_game_stats.py` 33 %
 - Excluded from the coverage run by `pyproject.toml`: `init_db.py`,
-  `routers/game.py`, `services/email_service.py` (needs a real SMTP server)
+  `services/email_service.py` (needs a real SMTP server)
+- `routers/game.py` left that omit list with US-32/33: it holds `submit_answer`,
+  which is security-critical (auth → validate → rate-limit → unlock gate → transact)
+  and an omitted file measures nothing. The three legacy handlers still in it
+  (`/correct`, `/incorrect`, `/leaderboard`) are excluded per handler by
+  `# pragma: no cover` and are deleted in US-34. Test counts above are the
+  Sprint-3 snapshot; US-32/33 add the answer-endpoint suites.
 
 ## Docker
 

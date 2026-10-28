@@ -26,10 +26,18 @@ are US-31, and the endpoint that assembles the wire response is US-33. All of it
 arrives through the single narrow :data:`EconomySeam` parameter, which is handed
 the pre-answer state plus the **post-increment** streak (OQ-5 — the multiplier
 always sees the streak *including* the answer being scored) and returns the
-``(xp_delta, total_xp, level)`` triple to persist. With no seam (US-28 alone) no
-XP moves and the level is left as-is. :class:`AnswerOutcome` carries the
-before-values as well, which is precisely what US-33 needs to call
-``unlock_service.newly_unlocked(previous_level, level)``.
+``(xp_delta, total_xp, level)`` triple to persist. The seam is a **required**
+argument (US-33 security finding M-2): an optional ``None`` default let a caller
+that forgot it record the streak and move no XP *silently*, which on the answer
+endpoint is a silent economy outage. An answer that must not touch XP — every
+US-28-only test, and nothing in production — passes an explicit no-op seam.
+:class:`AnswerOutcome` carries the before-values as well, which is precisely what
+US-33 needs to call ``unlock_service.newly_unlocked(previous_level, level)``.
+
+The seam's **return value** is checked for awaitability too (M-1, next to the
+existing ``iscoroutinefunction`` check on the callable): a plain ``def`` that
+hands back a coroutine object is the same AC-2 trap wearing a disguise, so
+:func:`record_answer` rejects it at the call boundary before anything is written.
 
 ``mode`` and ``bit_width`` are deliberately absent from :class:`StreakContext`:
 they are wire fields, and validating them is US-32's job. US-33 binds them by
@@ -41,6 +49,12 @@ contract — the engine's real signature is US-29's):
 
 Keeping them out of the context is what lets this module stay independent of the
 request schema instead of re-checking what the router already checked.
+
+The unlock gate of US-33 (security finding F-2) is the one read this module offers
+*outside* the seam: :func:`pre_answer_level` hands the router the ``FOR UPDATE``
+locked, pre-answer level, so a combo the answer itself would unlock still 403s.
+It is a locked read only — it never mutates and never commits, which is what lets
+the 403 path leave the row byte-identical.
 
 The lazy row creation mirrors the legacy ``UserStats`` pattern in
 ``src/routers/game.py:72-79`` (untouched until US-34): one row per user, created
@@ -64,8 +78,14 @@ __all__ = [
     "EconomySeam",
     "ProfileSnapshot",
     "StreakContext",
+    "pre_answer_level",
     "record_answer",
 ]
+
+# D-1 / OQ-3 — "a player starts at level 1 with 0 XP". The level the unlock gate
+# assumes for a user whose profile row does not exist yet (US-33 AC-3 lazy
+# creation): there is no stored level to read, and 1 is the column default.
+_FIRST_LEVEL = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +233,47 @@ async def _lock_or_create_profile(
     return profile, True
 
 
+async def pre_answer_level(session: AsyncSession, user_id: str) -> int:
+    """The unlock gate's input (US-33, security finding F-2): the locked level.
+
+    A ``SELECT ... FOR UPDATE`` on the profile row that returns its **pre-answer**
+    ``level`` — and ``1`` (D-1/OQ-3, the column default) when the user has no row
+    yet, because the lazy creation of AC-3 has not happened at gate time. The
+    router evaluates ``unlock_service.is_unlocked(mode, bit_width, level)`` on it,
+    so a combination the answer itself would have unlocked is still refused (403).
+
+    This is deliberately a plain locked **read**, not a seam: it must not be able
+    to write, commit or roll back, so the 403 path leaves the row byte-identical
+    (US-33 N12) and the caller's answer transaction stays intact.
+
+    Auditor note (Wave 2a review M-1) — the caller contract, stated because the
+    return type cannot: ``_FIRST_LEVEL`` answers **two different situations**, a user
+    whose ``users`` row exists but who has not answered yet, and an identity with no
+    ``users`` row at all. Both are indistinguishable here and both answer ``1``, so a
+    caller that reached this function first has to have established existence —
+    ``submit_answer`` does exactly that, one statement earlier, and answers 404 (see
+    :func:`src.services.answer_service.user_exists`). Over HTTP there is therefore no
+    path where a phantom identity is handed a level, and no attacker-controlled cost:
+    the ghost's request ends at that 404 with one ``INSERT`` (its own rate-limit row)
+    and one ``SELECT`` behind it, never a profile write. The distinction is pinned by
+    ``test_pre_answer_level_is_one_for_a_user_without_a_row`` in
+    ``tests/test_game_service.py``, and the HTTP half by
+    ``test_n14_unknown_user_leaves_no_row_and_404s`` in
+    ``tests/test_answer_endpoint.py``.
+    A future caller that skips the existence check inherits level 1, not an error —
+    that is the trade-off this note exists to make visible, and the reason the
+    existing 404 gate is not folded into this function.
+
+    Raises:
+        ValueError: empty ``user_id`` — same rule as :func:`record_answer`, so a
+            missing identity never reaches the database.
+    """
+    if not user_id:
+        raise ValueError("user_id must be a non-empty string")
+    profile = await _lock_profile(session, user_id)
+    return _FIRST_LEVEL if profile is None else profile.level
+
+
 def _snapshot(profile: UserGameProfile) -> ProfileSnapshot:
     """Freeze the current column values of a locked row."""
     return ProfileSnapshot(
@@ -237,6 +298,29 @@ def _validate_amount(value: Any, field: str) -> int:
             "(XP is an integer multiple of 4 — no bool, no float)"
         )
     return value
+
+
+def _require_sync_decision(decision: EconomyDecision, economy: EconomySeam) -> None:
+    """M-1 (US-33 security finding): the seam's RETURN value must not be awaitable.
+
+    ``inspect.iscoroutinefunction`` on the callable cannot see this: a plain ``def``
+    that returns ``an_async_function(ctx)`` hands back a coroutine object, and
+    anything that later awaits it is back inside the answer transaction — the exact
+    AC-2 / Rev 3 R-2 trap (a commit between the ``FOR UPDATE`` read and the write).
+    Rejecting at the call boundary means the row is never touched, and closing a
+    coroutine object keeps the interpreter from emitting a "never awaited" warning
+    for a decision that was refused on purpose.
+    """
+    if inspect.isawaitable(decision):
+        if inspect.iscoroutine(decision):
+            decision.close()
+        raise TypeError(
+            f"economy seam {getattr(economy, '__name__', type(economy).__name__)} "
+            f"returned an awaitable ({type(decision).__name__}) instead of an "
+            "EconomyDecision: awaiting it inside the answer transaction could "
+            "release the FOR UPDATE row lock early (US-28 AC-2 / Rev 3 R-2, "
+            "US-33 finding M-1)"
+        )
 
 
 def _validate_decision(before: ProfileSnapshot, decision: EconomyDecision) -> None:
@@ -275,7 +359,7 @@ async def record_answer(
     user_id: str,
     *,
     is_correct: bool,
-    economy: EconomySeam | None = None,
+    economy: EconomySeam,
 ) -> AnswerOutcome:
     """Record one answer: lock the row, apply the streak, commit once.
 
@@ -284,8 +368,11 @@ async def record_answer(
             NOT commit — :func:`record_answer` commits exactly once (AC-2).
         user_id: authenticated user; must already exist (US-33 404s otherwise).
         is_correct: the answer verdict, strictly a ``bool``.
-        economy: the optional :data:`EconomySeam` (US-33). ``None`` leaves XP and
-            level untouched, which is all US-28 promises.
+        economy: the :data:`EconomySeam`, **required** (US-33 finding M-2). It used
+            to default to ``None``, which let a caller that forgot it record the
+            streak and move no XP without any signal; an answer that is meant to
+            leave the economy alone has to say so with an explicit no-op seam
+            (``EconomyDecision(0, ctx.before.total_xp, ctx.before.level)``).
 
     Returns:
         The frozen :class:`AnswerOutcome` for the wire response.
@@ -294,8 +381,8 @@ async def record_answer(
         ValueError: empty ``user_id``, or a seam decision that disagrees with
             itself (before anything is written — a rejected answer commits
             nothing).
-        TypeError: non-``bool`` ``is_correct``, or a seam that is not a *sync*
-            callable.
+        TypeError: non-``bool`` ``is_correct``, a seam that is not a *sync*
+            callable, or a seam that returned an awaitable (M-1).
         IntegrityError: the ``users`` row disappeared mid-request.
     """
     if not user_id:
@@ -305,17 +392,18 @@ async def record_answer(
             f"is_correct must be a bool, got {type(is_correct).__name__}: "
             "a truthy non-bool must not silently decide the streak"
         )
-    if economy is not None:
-        if not callable(economy):
-            raise TypeError(
-                f"economy must be a callable or None, got {type(economy).__name__}"
-            )
-        if inspect.iscoroutinefunction(economy):
-            raise TypeError(
-                "economy must be a *sync* callable: an async seam could await "
-                "session.commit() inside the answer transaction and release the "
-                "FOR UPDATE row lock early (US-28 AC-2 / Rev 3 R-2)"
-            )
+    if not callable(economy):
+        raise TypeError(
+            f"economy must be a sync callable, got {type(economy).__name__}: "
+            "the seam is required (US-33 M-2) — pass an explicit no-op seam "
+            "to record an answer that moves no XP"
+        )
+    if inspect.iscoroutinefunction(economy):
+        raise TypeError(
+            "economy must be a *sync* callable: an async seam could await "
+            "session.commit() inside the answer transaction and release the "
+            "FOR UPDATE row lock early (US-28 AC-2 / Rev 3 R-2)"
+        )
 
     profile, created = await _lock_or_create_profile(session, user_id)
     before = _snapshot(profile)
@@ -340,12 +428,8 @@ async def record_answer(
         correct_count=correct_count,
         incorrect_count=incorrect_count,
     )
-    if economy is None:
-        decision = EconomyDecision(
-            xp_delta=0, total_xp=before.total_xp, level=before.level
-        )
-    else:
-        decision = economy(context)
+    decision = economy(context)
+    _require_sync_decision(decision, economy)
     _validate_decision(before, decision)
 
     profile.total_xp = decision.total_xp

@@ -106,6 +106,19 @@ def _recording_seam(
     return _seam
 
 
+def _no_economy(ctx: StreakContext) -> EconomyDecision:
+    """The explicit "this answer moves no XP" seam.
+
+    US-28 expressed that with the ``economy=None`` default; M-2 (US-33 security
+    finding) removed the default, because a caller that forgot the seam would
+    record a streak and silently skip the whole economy. The intent of the old
+    default survives here, as a value the caller has to hand over on purpose.
+    """
+    return EconomyDecision(
+        xp_delta=0, total_xp=ctx.before.total_xp, level=ctx.before.level
+    )
+
+
 def _grant(xp: int, level: int) -> Callable[[StreakContext], EconomyDecision]:
     """A seam that awards ``xp`` onto the pre-answer total and sets ``level``."""
 
@@ -126,7 +139,9 @@ async def test_first_correct_answer_creates_the_profile_lazily(session):
     """AC-3/AC-4: no row exists yet -> the answer creates it, streak 1."""
     user_id = await _seed_user(session)
 
-    outcome = await record_answer(session, user_id, is_correct=True)
+    outcome = await record_answer(
+        session, user_id, is_correct=True, economy=_no_economy
+    )
 
     assert outcome.created_profile is True
     assert (outcome.current_streak, outcome.best_streak) == (1, 1)
@@ -144,7 +159,9 @@ async def test_first_ever_incorrect_answer_creates_the_profile_lazily(session):
     """AC-3: the very first answer of a user may be an incorrect one."""
     user_id = await _seed_user(session)
 
-    outcome = await record_answer(session, user_id, is_correct=False)
+    outcome = await record_answer(
+        session, user_id, is_correct=False, economy=_no_economy
+    )
 
     assert outcome.created_profile is True
     assert (outcome.current_streak, outcome.best_streak) == (0, 0)  # D-5: no -1
@@ -160,7 +177,9 @@ async def test_exactly_one_profile_row_per_user(session, answers):
     user_id = await _seed_user(session)
 
     for is_correct in answers:
-        await record_answer(session, user_id, is_correct=is_correct)
+        await record_answer(
+            session, user_id, is_correct=is_correct, economy=_no_economy
+        )
 
     assert await _row_count(session, user_id) == 1
 
@@ -171,7 +190,9 @@ async def test_current_streak_counts_consecutive_correct_answers(session):
 
     streaks = []
     for _ in range(3):
-        outcome = await record_answer(session, user_id, is_correct=True)
+        outcome = await record_answer(
+            session, user_id, is_correct=True, economy=_no_economy
+        )
         streaks.append((outcome.current_streak, outcome.best_streak))
 
     assert streaks == [(1, 1), (2, 2), (3, 3)]
@@ -181,9 +202,9 @@ async def test_incorrect_resets_current_streak_and_preserves_best(session):
     """AC-4 / D-5: incorrect zeroes the streak and leaves best untouched."""
     user_id = await _seed_user(session)
     for _ in range(4):
-        await record_answer(session, user_id, is_correct=True)
+        await record_answer(session, user_id, is_correct=True, economy=_no_economy)
 
-    reset = await record_answer(session, user_id, is_correct=False)
+    reset = await record_answer(session, user_id, is_correct=False, economy=_no_economy)
 
     assert (reset.current_streak, reset.best_streak) == (0, 4)
     assert (reset.correct_count, reset.incorrect_count) == (4, 1)
@@ -195,7 +216,9 @@ async def test_incorrect_never_drives_the_streak_negative(session, repeat):
     user_id = await _seed_user(session)
 
     for _ in range(repeat):
-        outcome = await record_answer(session, user_id, is_correct=False)
+        outcome = await record_answer(
+            session, user_id, is_correct=False, economy=_no_economy
+        )
 
     assert outcome.current_streak == 0
     assert outcome.best_streak == 0
@@ -208,7 +231,9 @@ async def test_best_streak_is_a_high_water_mark(session):
 
     seen = []
     for is_correct in (True, True, False, True, True, True, False, True):
-        outcome = await record_answer(session, user_id, is_correct=is_correct)
+        outcome = await record_answer(
+            session, user_id, is_correct=is_correct, economy=_no_economy
+        )
         seen.append((outcome.current_streak, outcome.best_streak))
 
     assert seen == [
@@ -230,7 +255,9 @@ async def test_counters_track_every_answer(session):
     user_id = await _seed_user(session)
 
     for is_correct in (True, False, True, True, False):
-        outcome = await record_answer(session, user_id, is_correct=is_correct)
+        outcome = await record_answer(
+            session, user_id, is_correct=is_correct, economy=_no_economy
+        )
 
     assert (outcome.correct_count, outcome.incorrect_count) == (3, 2)
 
@@ -239,11 +266,11 @@ async def test_updated_at_refreshes_on_every_answer(session):
     """US-26: updated_at is a maintenance timestamp, not a creation stamp."""
     user_id = await _seed_user(session)
 
-    await record_answer(session, user_id, is_correct=True)
+    await record_answer(session, user_id, is_correct=True, economy=_no_economy)
     first = (await _row(session, user_id)).updated_at
 
     await asyncio.sleep(0.001)
-    await record_answer(session, user_id, is_correct=True)
+    await record_answer(session, user_id, is_correct=True, economy=_no_economy)
     second = (await _row(session, user_id)).updated_at
 
     assert second > first
@@ -274,7 +301,7 @@ async def test_seam_receives_zero_streak_on_incorrect(session):
     user_id = await _seed_user(session)
     calls: list[StreakContext] = []
     for _ in range(2):
-        await record_answer(session, user_id, is_correct=True)
+        await record_answer(session, user_id, is_correct=True, economy=_no_economy)
 
     await record_answer(
         session, user_id, is_correct=False, economy=_recording_seam(calls)
@@ -310,15 +337,25 @@ async def test_seam_context_carries_the_pre_answer_state_and_flags(session):
 
 
 async def test_seam_none_leaves_xp_and_level_untouched(session):
-    """US-28 alone moves no XP: the economy is a different story's business."""
+    """US-28 alone moves no XP: the economy is a different story's business.
+
+    The nodeid keeps the word ``none`` because this is US-28's case, unchanged in
+    intent — but M-2 removed the ``economy=None`` **default** that used to express
+    it, so the no-op is spelled :data:`_no_economy` now. The point of the signature
+    change is exactly that a caller can no longer arrive here by forgetting an
+    argument; :func:`test_economy_is_a_required_keyword_argument` holds that half.
+    """
     user_id = await _seed_user(session)
     await record_answer(session, user_id, is_correct=True, economy=_grant(40, 1))
 
-    outcome = await record_answer(session, user_id, is_correct=True)
+    outcome = await record_answer(
+        session, user_id, is_correct=True, economy=_no_economy
+    )
 
     assert outcome.xp_delta == 0
     assert (outcome.total_xp, outcome.level) == (40, 1)
     assert (outcome.previous_total_xp, outcome.previous_level) == (40, 1)
+    assert (outcome.current_streak, outcome.correct_count) == (2, 2)
 
 
 async def test_seam_decision_is_persisted_and_reported(session):
@@ -455,13 +492,15 @@ async def test_non_bool_is_correct_is_rejected(session, is_correct):
     user_id = await _seed_user(session)
 
     with pytest.raises(TypeError):
-        await record_answer(session, user_id, is_correct=is_correct)
+        await record_answer(
+            session, user_id, is_correct=is_correct, economy=_no_economy
+        )
 
 
 async def test_empty_user_id_is_rejected(session):
     """A missing identity never reaches the database (FK error would be loud)."""
     with pytest.raises(ValueError):
-        await record_answer(session, "", is_correct=True)
+        await record_answer(session, "", is_correct=True, economy=_no_economy)
 
 
 # --------------------------------------------------------------------------- #
@@ -508,10 +547,10 @@ async def test_exactly_one_commit_per_answer(session, async_engine, seed_answer)
     """
     user_id = await _seed_user(session)
     if seed_answer:
-        await record_answer(session, user_id, is_correct=True)
+        await record_answer(session, user_id, is_correct=True, economy=_no_economy)
 
     async with _commit_log(async_engine) as commits:
-        await record_answer(session, user_id, is_correct=True)
+        await record_answer(session, user_id, is_correct=True, economy=_no_economy)
 
     assert commits.log == ["commit"]
 
@@ -520,7 +559,9 @@ async def test_the_seam_runs_before_the_single_commit(session, async_engine):
     """AC-2: nothing commits ahead of the answer, so the seam still holds the
     ``FOR UPDATE`` row lock — an early commit would appear before ``seam``."""
     user_id = await _seed_user(session)
-    await record_answer(session, user_id, is_correct=True)  # row exists
+    await record_answer(
+        session, user_id, is_correct=True, economy=_no_economy
+    )  # row exists
 
     async with _commit_log(async_engine) as commits:
 
@@ -544,7 +585,9 @@ async def test_select_for_update_reaches_the_wire(session, async_engine):
     pinned on the statement text Postgres receives.
     """
     user_id = await _seed_user(session)
-    await record_answer(session, user_id, is_correct=True)  # lazy-create first
+    await record_answer(
+        session, user_id, is_correct=True, economy=_no_economy
+    )  # lazy-create first
 
     statements: list[str] = []
 
@@ -553,7 +596,7 @@ async def test_select_for_update_reaches_the_wire(session, async_engine):
 
     event.listen(async_engine.sync_engine, "before_cursor_execute", _capture)
     try:
-        await record_answer(session, user_id, is_correct=True)
+        await record_answer(session, user_id, is_correct=True, economy=_no_economy)
     finally:
         event.remove(async_engine.sync_engine, "before_cursor_execute", _capture)
 
@@ -591,7 +634,9 @@ async def test_concurrent_answers_serialize_and_the_second_sees_the_committed_st
             {"u": user_id},
         )
 
-        task = asyncio.create_task(record_answer(session, user_id, is_correct=True))
+        task = asyncio.create_task(
+            record_answer(session, user_id, is_correct=True, economy=_no_economy)
+        )
         await asyncio.sleep(0.05)
         assert not task.done()  # blocked on the row lock, not on a bug in the test
 
@@ -622,7 +667,10 @@ async def test_concurrent_first_answers_create_exactly_one_profile_row(
 
     async with factory() as first, factory() as second:
         outcomes = await asyncio.gather(
-            *(record_answer(s, user_id, is_correct=True) for s in (first, second))
+            *(
+                record_answer(s, user_id, is_correct=True, economy=_no_economy)
+                for s in (first, second)
+            )
         )
 
     assert sorted(outcome.created_profile for outcome in outcomes) == [False, True]
@@ -648,7 +696,9 @@ async def test_pk_race_loser_rereads_the_winners_row(
     from src.services import game_service
 
     user_id = await _seed_user(session)
-    await record_answer(session, user_id, is_correct=True)  # winner: row committed
+    await record_answer(
+        session, user_id, is_correct=True, economy=_no_economy
+    )  # winner: row committed
 
     real_lock = game_service._lock_profile
     lock_calls = {"n": 0}
@@ -665,7 +715,9 @@ async def test_pk_race_loser_rereads_the_winners_row(
         async_engine, class_=AsyncSession, expire_on_commit=False
     )
     async with factory() as loser:
-        outcome = await record_answer(loser, user_id, is_correct=False)
+        outcome = await record_answer(
+            loser, user_id, is_correct=False, economy=_no_economy
+        )
 
     assert lock_calls["n"] == 2  # blinded first read + the retry re-read
     assert outcome.created_profile is False
@@ -685,7 +737,7 @@ async def test_missing_user_raises_and_leaves_no_profile(session):
     user_id = str(uuid7())
 
     with pytest.raises(IntegrityError):
-        await record_answer(session, user_id, is_correct=True)
+        await record_answer(session, user_id, is_correct=True, economy=_no_economy)
 
     await session.rollback()
     assert await _row_count(session, user_id) == 0
@@ -701,7 +753,9 @@ async def test_record_answer_never_touches_user_stats(session):
     user_id = await _seed_user(session)
 
     for is_correct in (True, True, False):
-        await record_answer(session, user_id, is_correct=is_correct)
+        await record_answer(
+            session, user_id, is_correct=is_correct, economy=_no_economy
+        )
 
     legacy = (
         await session.execute(select(UserStats).where(UserStats.user_id == user_id))
@@ -714,3 +768,198 @@ async def test_record_answer_never_touches_user_stats(session):
         )
     ).scalar_one()
     assert (profile.current_streak, profile.best_streak) == (0, 2)
+
+
+# --------------------------------------------------------------------------- #
+# F. US-33 security findings M-1 / M-2: the seam is REQUIRED, and its RETURN
+#    value is checked for awaitability at the call boundary too.
+# --------------------------------------------------------------------------- #
+
+
+def _awaitable_seam_factory(
+    session_holder: list[AsyncSession],
+) -> Callable[[StreakContext], EconomyDecision]:
+    """A *sync* callable that hands back an un-awaited coroutine (M-1).
+
+    ``inspect.iscoroutinefunction`` on the callable is ``False`` here, so the
+    existing guard cannot see this: the awaitable only appears in the RETURN
+    value, which is exactly the hole M-1 closes. The coroutine would also leak a
+    "never awaited" RuntimeWarning if the service did not close it.
+    """
+
+    async def _deferred(ctx: StreakContext) -> EconomyDecision:
+        # Would be reachable only if something awaited us — i.e. only if the
+        # guard is missing. It records the session so the test can prove the
+        # body never ran.
+        session_holder.append(None)  # pragma: no cover - guarded away
+        return EconomyDecision(
+            xp_delta=0, total_xp=ctx.before.total_xp, level=ctx.before.level
+        )
+
+    def _seam(ctx: StreakContext) -> EconomyDecision:
+        return _deferred(ctx)  # a coroutine object, not a decision
+
+    return _seam
+
+
+async def test_economy_is_a_required_keyword_argument(session):
+    """M-2: the silent-``None`` trap is gone — omitting the seam is a TypeError.
+
+    US-28 shipped ``economy: EconomySeam | None = None``, so a caller that simply
+    forgot the seam recorded the streak and moved no XP *silently* — on the answer
+    endpoint that is a silent economy outage. The parameter is required now, and
+    a no-XP answer must say so with an explicit seam.
+    """
+    user_id = await _seed_user(session)
+
+    with pytest.raises(TypeError) as excinfo:
+        await record_answer(session, user_id, is_correct=True)
+
+    assert "economy" in str(excinfo.value)
+    await session.rollback()
+    assert await _row_count(session, user_id) == 0  # nothing committed
+
+
+@pytest.mark.parametrize("economy", [None, False, 0])
+async def test_explicit_none_seam_is_rejected(session, economy):
+    """M-2: ``None`` is not a seam any more — not implicitly, not explicitly."""
+    user_id = await _seed_user(session)
+
+    with pytest.raises(TypeError) as excinfo:
+        await record_answer(session, user_id, is_correct=True, economy=economy)
+
+    assert "economy" in str(excinfo.value)
+
+
+async def test_awaitable_returning_seam_is_rejected_and_commits_nothing(
+    session, async_engine
+):
+    """M-1: an awaitable RETURN is caught at the call boundary, before any write.
+
+    The callable is sync (so the pre-existing ``iscoroutinefunction`` guard is
+    blind to it) but returns a coroutine object. Awaiting it inside the answer
+    transaction would be the exact AC-2 trap — a seam that can ``await
+    session.commit()`` — so the service rejects it and the row keeps its
+    byte-identical state with zero COMMITs.
+    """
+    user_id = await _seed_user(session)
+    await record_answer(session, user_id, is_correct=True, economy=_grant(120, 3))
+    before = await _row(session, user_id)
+    ran: list = []
+
+    async with _commit_log(async_engine) as commits:
+        with pytest.raises(TypeError) as excinfo:
+            await record_answer(
+                session,
+                user_id,
+                is_correct=True,
+                economy=_awaitable_seam_factory(ran),
+            )
+
+    assert "awaitable" in str(excinfo.value).lower()
+    assert commits.log == []  # the rejection commits nothing
+    assert ran == []  # the coroutine body never executed
+    await session.rollback()
+    assert tuple(await _row(session, user_id)) == tuple(before)
+
+
+# --------------------------------------------------------------------------- #
+# G. US-33 F-2: the router-owned locked pre-answer read (the unlock gate's input)
+# --------------------------------------------------------------------------- #
+
+
+async def test_pre_answer_level_is_one_for_a_user_without_a_row(session):
+    """No profile row yet -> the gate reads the D-1/OQ-3 default (level 1).
+
+    A first-ever answer must not be gated by a missing row: the lazy creation of
+    AC-3 has not happened at gate time, and the column default is level 1.
+    """
+    from src.services.game_service import pre_answer_level
+
+    user_id = await _seed_user(session)
+
+    assert await pre_answer_level(session, user_id) == 1
+
+
+async def test_pre_answer_level_refuses_a_missing_identity(session):
+    """An empty ``user_id`` is a caller bug, refused before any SQL (AC-1 symmetry).
+
+    Same rule as :func:`record_answer`: the gate read is inside the answer
+    transaction, so a blank identity reaching the database would lock nothing and
+    answer ``1`` — a level the caller would then treat as a real pre-answer state.
+    """
+    from src.services.game_service import pre_answer_level
+
+    with pytest.raises(ValueError, match="non-empty"):
+        await pre_answer_level(session, "")
+
+
+async def test_pre_answer_level_reads_the_locked_row_without_mutating_it(
+    session, async_engine
+):
+    """The gate read returns the persisted level and writes nothing (no COMMIT)."""
+    from src.services.game_service import pre_answer_level
+
+    user_id = await _seed_user(session)
+    await record_answer(session, user_id, is_correct=True, economy=_grant(476, 4))
+    before = await _row(session, user_id)
+
+    async with _commit_log(async_engine) as commits:
+        statements: list[str] = []
+
+        def _capture(sync_conn, cursor, statement, *args, **kwargs) -> None:
+            statements.append(statement)
+
+        event.listen(async_engine.sync_engine, "before_cursor_execute", _capture)
+        try:
+            level = await pre_answer_level(session, user_id)
+        finally:
+            event.remove(async_engine.sync_engine, "before_cursor_execute", _capture)
+
+    assert level == 4
+    assert commits.log == []  # a gate read is not a transaction of its own
+    profile_selects = [
+        stmt
+        for stmt in statements
+        if "user_game_profile" in stmt and stmt.lstrip().upper().startswith("SELECT")
+    ]
+    assert profile_selects, statements  # F-2: the read is FOR UPDATE
+    assert any("FOR UPDATE" in stmt.upper() for stmt in profile_selects)
+
+    await session.rollback()
+    assert tuple(await _row(session, user_id)) == tuple(before)
+
+
+async def test_pre_answer_level_blocks_a_concurrent_writer(session, async_engine):
+    """F-2: the gate holds the row lock, so a racing answer cannot slip its level in.
+
+    The gate must read the level the *answer transaction* will score against. If
+    the read were a plain SELECT, a concurrent answer could commit a level-up
+    between the gate and the write and unlock content the gate never approved.
+    """
+    from src.services.game_service import pre_answer_level
+
+    user_id = await _seed_user(session)
+    await record_answer(session, user_id, is_correct=True, economy=_grant(476, 4))
+    factory = async_sessionmaker(
+        async_engine, class_=AsyncSession, expire_on_commit=False
+    )
+
+    async with factory() as holder, factory() as rival:
+        gate = await pre_answer_level(holder, user_id)  # takes FOR UPDATE
+        assert gate == 4
+
+        task = asyncio.create_task(
+            record_answer(rival, user_id, is_correct=True, economy=_grant(40, 5))
+        )
+        await asyncio.sleep(0.05)
+        assert not task.done()  # blocked on the lock the gate holds
+
+        await holder.rollback()  # the gate rejects the answer: nothing was written
+        outcome = await asyncio.wait_for(task, timeout=10)
+
+    # The seed answer was correct too, so the rival continues from streak 1 -> 2:
+    # it waited for the gate's lock instead of reading a pre-commit snapshot.
+    assert outcome.level == 5
+    assert outcome.previous_level == 4
+    assert (outcome.current_streak, outcome.correct_count) == (2, 2)
