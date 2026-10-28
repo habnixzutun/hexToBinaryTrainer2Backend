@@ -1,28 +1,41 @@
-"""Game router: score tracking and leaderboard.
+"""Game router: score tracking, the economy read side, and the leaderboard.
 
-US-33 adds ``POST /api/game/answer`` — the Sprint-4 economy endpoint — alongside the
-legacy ``/correct`` / ``/incorrect`` / ``/leaderboard`` handlers, which stay on
-``user_stats`` until US-34 removes them (D-6). The new handler deliberately holds
-nothing but the **gate order** and its HTTP mappings:
+Three generations of handler live here on purpose (plan D-6):
 
-    authenticate (401) -> validate body (422) -> rate-limit (429)
-        -> unlock gate (403) -> transact (200 / 404)
+* **Legacy writers** ``/correct`` and ``/incorrect`` — still on ``user_stats``,
+  still ``# pragma: no cover``, deleted by US-34.
+* **The Sprint-4 write path** ``POST /api/game/answer`` (US-33), which holds
+  nothing but the **gate order** and its HTTP mappings::
 
-Every number in the response comes from a service module
-(:mod:`src.services.answer_service`, :mod:`src.services.game_service`), because
-arithmetic in a router is arithmetic no other caller can reuse and no unit test can
-reach without HTTP.
+      authenticate (401) -> validate body (422) -> rate-limit (429)
+          -> unlock gate (403) -> transact (200 / 404)
+
+* **The Sprint-4 read side** (US-35/US-36): ``GET /profile`` for the caller's own
+  economy state and ``GET /leaderboard`` for the public ranking — the latter
+  rewritten onto ``user_game_profile`` by US-36 while keeping its path, its
+  public visibility (Rev 3 R-3/OQ-9) and its ``{entries: [...]}`` wrapper.
+
+Every number in every response comes from a service module
+(:mod:`src.services.answer_service`, :mod:`src.services.game_service`,
+:mod:`src.services.profile_service`, :mod:`src.services.leaderboard_service`),
+because arithmetic in a router is arithmetic no other caller can reuse and no unit
+test can reach without HTTP.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
-from sqlalchemy import desc, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.engine import AsyncSessionLocal, get_db
 from src.models.auth import User
 from src.models.game import UserStats
-from src.models.game_schemas import AnswerRequest, AnswerResponse
+from src.models.game_schemas import (
+    AnswerRequest,
+    AnswerResponse,
+    LeaderboardResponseV2,
+    ProfileResponse,
+)
 from src.routers.user import _extract_bearer_user_id
 from src.services.answer_service import (
     answer_response,
@@ -36,6 +49,13 @@ from src.services.game_config import (
     ANSWER_RATE_WINDOW_SECONDS,
 )
 from src.services.game_service import pre_answer_level, record_answer
+from src.services.leaderboard_service import (
+    LEADERBOARD_DEFAULT_LIMIT,
+    LEADERBOARD_MAX_LIMIT,
+    LEADERBOARD_MIN_LIMIT,
+    leaderboard_entries,
+)
+from src.services.profile_service import load_snapshot, profile_response
 from src.services.rate_limit_service import RateLimitService
 
 router = APIRouter(prefix="/api/game", tags=["game"])
@@ -57,20 +77,11 @@ class GameSubmitResponse(BaseModel):
     points: int
 
 
-class LeaderboardEntry(BaseModel):
-    """Single leaderboard entry."""
-
-    user_id: str
-    username: str
-    correct_count: int
-    incorrect_count: int
-    points: int
-
-
-class LeaderboardResponse(BaseModel):
-    """Wrapped leaderboard response."""
-
-    entries: list[LeaderboardEntry]
+# US-36 replaced the legacy ``LeaderboardEntry`` / ``LeaderboardResponse`` pair
+# with US-26's frozen ``LeaderboardEntryV2`` / ``LeaderboardResponseV2``: the entry
+# drops ``points`` outright rather than aliasing it (Rev 3 — an alias would have to
+# be removed again in US-34), and both wire shapes live in the schema module next to
+# the answer and profile contracts instead of here.
 
 
 @router.post(
@@ -167,37 +178,6 @@ async def record_incorrect_answer(  # pragma: no cover — legacy, gone in US-34
         incorrect_count=stats.incorrect_count,
         points=stats.points,
     )
-
-
-@router.get(
-    "/leaderboard",
-    status_code=status.HTTP_200_OK,
-    response_model=LeaderboardResponse,
-)
-async def get_leaderboard(  # pragma: no cover — legacy, gone in US-34 (D-6)
-    session: AsyncSession = Depends(get_db),
-    limit: int = 50,
-) -> LeaderboardResponse:
-    """Get top players leaderboard sorted by points descending."""
-    result = await session.execute(
-        select(UserStats, User.username)
-        .join(User, UserStats.user_id == User.id)
-        .order_by(desc(UserStats.points))
-        .limit(limit)
-    )
-
-    entries = [
-        LeaderboardEntry(
-            user_id=stats.user_id,
-            username=username,
-            correct_count=stats.correct_count,
-            incorrect_count=stats.incorrect_count,
-            points=stats.points,
-        )
-        for stats, username in result.all()
-    ]
-
-    return LeaderboardResponse(entries=entries)
 
 
 # --------------------------------------------------------------------------- #
@@ -331,3 +311,98 @@ async def submit_answer(
         economy=economy_seam(body.mode, body.bit_width),
     )
     return answer_response(outcome)
+
+
+# --------------------------------------------------------------------------- #
+# US-35: GET /api/game/profile
+# --------------------------------------------------------------------------- #
+
+
+@router.get(
+    "/profile",
+    status_code=status.HTTP_200_OK,
+    response_model=ProfileResponse,
+    summary="The caller's own economy state (Sprint 4 economy)",
+)
+async def get_profile(
+    user_id: str = Depends(require_answer_identity),
+    session: AsyncSession = Depends(get_db),
+) -> ProfileResponse:
+    """Return the authenticated player's full economy state.
+
+    Three steps, in the order US-33 froze for this router (Rev 3 R-10: the three
+    authenticated reads answer the same identity questions the same way):
+
+    1. **Authenticate** — ``require_answer_identity``, 401 with zero SQL, before a
+       session exists.
+    2. **Resolve** — 404 when the token names a user that is gone.
+    3. **Read** — :func:`~src.services.profile_service.load_snapshot` and project
+       it through :func:`~src.services.profile_service.profile_response`.
+
+    A missing ``user_game_profile`` row is not an error and not a write: the row is
+    created lazily by the first ``POST /api/game/answer`` (US-28 AC-3), so this read
+    answers the D-1/OQ-3 zero state (level 1, 0 XP, the full L1 ladder) and inserts
+    nothing — the test ``test_profile_does_not_create_the_row_it_reports_on`` pins
+    exactly that, because a GET that wrote would put a lock on the hottest read path.
+
+    ``unlocks`` is the FULL ladder for the derived level (§4.9 UN-02), built from
+    US-26's :class:`UnlockEntry` — the same element type as ``AnswerResponse.
+    newly_unlocked`` (R-9), so US-31's producer and US-38's toast parse one shape.
+
+    Raises:
+        HTTPException: 401 (no/bad/expired/refresh token), 404 (the token's user is
+            gone).
+    """
+    if not await user_exists(session, user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    return profile_response(await load_snapshot(session, user_id))
+
+
+# --------------------------------------------------------------------------- #
+# US-36: GET /api/game/leaderboard
+# --------------------------------------------------------------------------- #
+
+
+@router.get(
+    "/leaderboard",
+    status_code=status.HTTP_200_OK,
+    response_model=LeaderboardResponseV2,
+    summary="Public top-XP ranking (Sprint 4 economy)",
+)
+async def get_leaderboard(
+    limit: int = Query(
+        default=LEADERBOARD_DEFAULT_LIMIT,
+        ge=LEADERBOARD_MIN_LIMIT,
+        le=LEADERBOARD_MAX_LIMIT,
+        description="How many entries to return, 1..100.",
+    ),
+    session: AsyncSession = Depends(get_db),
+) -> LeaderboardResponseV2:
+    """Return the top ``limit`` players by total XP.
+
+    **This endpoint is public — no authentication at all** (PO decision 2026-10-27,
+    Rev 3 R-3 / OQ-9). Rev 2 had made it auth-required "for parity with the other
+    game endpoints"; that would have broken a documented public contract and left the
+    frontend's un-try/caught 30-second poll spinning forever. The abuse control here
+    is the bounded ``limit`` rather than auth, which is why the same 1..100 bound is
+    enforced twice: at this boundary (a 422 from FastAPI's ``Query`` validation) and
+    again inside :func:`~src.services.leaderboard_service.leaderboard_entries`, so a
+    future non-HTTP caller cannot ask for the whole table. The entry shape carries no
+    PII — ``username`` plus game numbers, no email — which is what makes public-ness
+    defensible in the first place.
+
+    The path, the ``{entries: [...]}`` wrapper and the public visibility are all
+    unchanged from the Sprint-2 board; what changed underneath is the source
+    (``user_game_profile``, not ``user_stats.points``), the total order
+    (``total_xp DESC``, ``incorrect_count ASC``, ``user_id ASC``) and the entry
+    fields (``points`` is gone outright, no deprecated alias — an alias would have to
+    be removed again in US-34).
+
+    Raises:
+        HTTPException: 422 (``limit`` outside 1..100, or not an integer).
+    """
+    return LeaderboardResponseV2(entries=await leaderboard_entries(session, limit))

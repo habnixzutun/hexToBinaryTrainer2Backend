@@ -912,10 +912,16 @@ async def test_legacy_game_endpoints_survive_the_v004_boot(
     """AC-3: /correct, /incorrect, /leaderboard and /api/user/me still work.
 
     The whole point of the additive split (Rev 3 R-1): with v004 wired in, the
-    legacy endpoints keep reading and writing user_stats, and they do NOT touch
+    legacy writers keep reading and writing user_stats, and they do NOT touch
     user_game_profile — XP is only ever written to the new table by /answer
     (US-33). Runs against the real app and the real Postgres test DB, no
     dependency override, after a genuine lifespan boot.
+
+    US-36/US-37 moved the two READ sides onto ``user_game_profile``, so what this
+    test now proves is the co-existence itself: a legacy write leaves the new
+    table empty, and the read sides therefore report the zero state instead of the
+    legacy counters — while the legacy writers keep answering with their own
+    ``points`` until US-34 removes them.
     """
     from httpx import ASGITransport, AsyncClient
     from src import main as main_module
@@ -951,18 +957,25 @@ async def test_legacy_game_endpoints_survive_the_v004_boot(
 
             me = await client.get("/api/user/me", headers=headers)
             assert me.status_code == 200, me.text
-            assert me.json()["points"] == -8
-            assert me.json()["correct_count"] == 1
+            payload = me.json()
+            # US-37: /me reads user_game_profile, which the legacy writers never
+            # touched -> the economy zero state, and no ``points`` key at all.
+            assert payload["total_xp"] == 0
+            assert payload["level"] == 1
+            assert payload["current_streak"] == 0
+            assert payload["best_streak"] == 0
+            assert payload["correct_count"] == 0
+            assert payload["incorrect_count"] == 0
+            assert "points" not in payload
 
-            # the leaderboard stays public (R-3/OQ-9) and still sorts by points
+            # the leaderboard stays public (R-3/OQ-9) and now sorts by total_xp;
+            # the legacy user has no profile row, so it is not on the board.
             board = await client.get("/api/game/leaderboard")
             assert board.status_code == 200, board.text
-            entry = next(
-                row
-                for row in board.json()["entries"]
-                if row["user_id"] == "v004-legacy-1"
+            assert "points" not in board.text
+            assert all(
+                row["user_id"] != "v004-legacy-1" for row in board.json()["entries"]
             )
-            assert entry["points"] == -8
 
         profile_rows = (
             await migration_session.execute(

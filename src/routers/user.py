@@ -1,4 +1,11 @@
-"""User router: current user info and email/username/password changes (US-16, US-19)."""
+"""User router: current user info and email/username/password changes (US-16, US-19).
+
+``GET /api/user/me`` is the Sprint-4 read side of US-37 — identity fields plus the
+economy numbers, served from :mod:`src.services.profile_service` so it cannot
+disagree with ``GET /api/game/profile`` (US-35). The legacy ``points`` field and its
+``user_stats`` source are gone from this file; the ``UserStats`` ORM class itself
+stays in :mod:`src.models.game` until US-34 drops the table.
+"""
 
 from datetime import UTC, datetime, timedelta
 
@@ -10,9 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.engine import get_db
 from src.models.auth import User, UserIdentity
-from src.models.game import UserStats
 from src.services.audit_service import log_audit_action, send_security_notification
 from src.services.email_service import EmailService, MockEmailService
+from src.services.profile_service import load_snapshot
 from src.services.user_service import change_password
 from src.utils.email_change_token import (
     create_email_change_token,
@@ -110,46 +117,76 @@ class UsernameChangeRequest(BaseModel):
 
 
 class UserMeResponse(BaseModel):
+    """The nine fields US-37 froze: identity, then the Sprint-4 economy numbers."""
+
     id: str
     username: str
     email: str
     correct_count: int
     incorrect_count: int
-    points: int
+    total_xp: int
+    level: int
+    current_streak: int
+    best_streak: int
 
 
 @router.get(
     "/api/user/me",
     status_code=status.HTTP_200_OK,
     response_model=UserMeResponse,
+    summary="Current user profile with economy state (US-37)",
 )
 async def get_current_user(
     request: Request,
     session: AsyncSession = Depends(get_db),
 ) -> UserMeResponse:
+    """Return the caller's identity plus their economy state.
+
+    US-37 moved this read off the legacy ``user_stats`` counters and onto
+    ``user_game_profile``, through the same
+    :func:`~src.services.profile_service.load_snapshot` that serves
+    ``GET /api/game/profile`` (US-35). Sharing the loader is the whole point: the six
+    economy fields the two endpoints have in common are then the same five stored
+    columns plus one :func:`~src.services.level_service.level_from_xp` call, so
+    "``/me`` and ``/profile`` agree field-for-field" is a property of the code rather
+    than a coincidence two handlers happen to preserve. ``tests/test_user_me.py``
+    pins it against a shared fixture anyway.
+
+    A missing profile row answers the D-1/OQ-3 zero state (level 1 at 0 XP) rather
+    than erroring or inserting: the row is created lazily by the first
+    ``POST /api/game/answer`` (US-28 AC-3), and a GET that wrote would put a
+    round-trip and a lock on the profile screen's hottest path.
+
+    Raises:
+        HTTPException: 401 for a missing/invalid/expired/wrong-type token — the only
+            meaning of 401 here. 404 when the token is fine but the user it names is
+            gone (Rev 3 R-10): the legacy handler answered that with 401, which told
+            every client to re-authenticate for an account that no longer exists, and
+            diverged from ``/api/game/answer`` (US-33) and ``/api/game/profile``
+            (US-35), which both answer 404 "User not found." for this condition.
+    """
     user_id = _extract_bearer_user_id(request)
 
     result = await session.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found.",
         )
 
-    # user_stats row is created lazily on the first game action (see game.py).
-    stats_result = await session.execute(
-        select(UserStats).where(UserStats.user_id == user_id)
-    )
-    stats = stats_result.scalar_one_or_none()
+    snapshot = await load_snapshot(session, user_id)
 
     return UserMeResponse(
         id=user.id,
         username=user.username,
         email=user.email,
-        correct_count=stats.correct_count if stats else 0,
-        incorrect_count=stats.incorrect_count if stats else 0,
-        points=stats.points if stats else 0,
+        total_xp=snapshot.total_xp,
+        level=snapshot.level,
+        current_streak=snapshot.current_streak,
+        best_streak=snapshot.best_streak,
+        correct_count=snapshot.correct_count,
+        incorrect_count=snapshot.incorrect_count,
     )
 
 
