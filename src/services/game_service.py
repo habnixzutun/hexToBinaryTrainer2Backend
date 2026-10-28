@@ -34,6 +34,19 @@ US-28-only test, and nothing in production — passes an explicit no-op seam.
 :class:`AnswerOutcome` carries the before-values as well, which is precisely what
 US-33 needs to call ``unlock_service.newly_unlocked(previous_level, level)``.
 
+**One level, one source (Phase 2b H1).** Every level this module *reports* is
+``total_xp`` run through :func:`~src.services.level_service.level_from_xp` — the write
+side, the unlock gate's :func:`pre_answer_level` and the two levels of
+:class:`AnswerOutcome` alike — which is the same function the read side
+(``profile_service``, ``leaderboard_service``) already uses. The stored
+``user_game_profile.level`` column is still written, so the NOT NULL column and its
+``CHECK (level >= 1)`` stay populated for raw-SQL readers (US-41's fixtures, a future
+report query), but it is a **denormalization**: nothing on the report path reads it. A
+row whose stored level disagrees with its own total (manual SQL, a fixture, a future
+writer) therefore still tells one story on every endpoint, and "``/answer``,
+``/profile``, ``/me`` and the board agree" holds by construction instead of by the good
+behaviour of the writer that last touched the row.
+
 The seam's **return value** is checked for awaitability too (M-1, next to the
 existing ``iscoroutinefunction`` check on the callable): a plain ``def`` that
 hands back a coroutine object is the same AC-2 trap wearing a disguise, so
@@ -71,6 +84,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.models.game import UserGameProfile
+from src.services.level_service import level_from_xp
 
 __all__ = [
     "AnswerOutcome",
@@ -159,9 +173,11 @@ class AnswerOutcome:
     """The persisted result of one recorded answer, ready for US-33's response.
 
     ``xp_delta``/``total_xp``/``level``/``*_streak``/``*_count`` are post-answer;
-    ``previous_total_xp``/``previous_level`` are pre-answer. ``newly_unlocked`` is
-    NOT here: it is a pure function of the two levels and belongs to US-31's
-    ``unlock_service`` — see the module docstring.
+    ``previous_total_xp``/``previous_level`` are pre-answer. Both levels are
+    :func:`~src.services.level_service.level_from_xp` of the total they sit next to
+    (H1), so the ``newly_unlocked(previous_level, level)`` US-33 derives from them —
+    not a field here, it belongs to US-31's ``unlock_service`` (see the module
+    docstring) — is computed from the same arithmetic the read side reports.
     """
 
     user_id: str
@@ -236,9 +252,12 @@ async def _lock_or_create_profile(
 async def pre_answer_level(session: AsyncSession, user_id: str) -> int:
     """The unlock gate's input (US-33, security finding F-2): the locked level.
 
-    A ``SELECT ... FOR UPDATE`` on the profile row that returns its **pre-answer**
-    ``level`` — and ``1`` (D-1/OQ-3, the column default) when the user has no row
-    yet, because the lazy creation of AC-3 has not happened at gate time. The
+    A ``SELECT ... FOR UPDATE`` on the profile row that returns the **pre-answer**
+    level *derived from that row's* ``total_xp`` (H1: never the stored ``level``
+    column, so the gate and the read side cannot disagree about what a player may
+    play) — and ``1`` (D-1/OQ-3, the column default) when the user has no row yet,
+    because the lazy creation of AC-3 has not happened at gate time. Both answers are
+    one function: :func:`~src.services.level_service.level_from_xp` of 0 *is* 1. The
     router evaluates ``unlock_service.is_unlocked(mode, bit_width, level)`` on it,
     so a combination the answer itself would have unlocked is still refused (403).
 
@@ -271,7 +290,7 @@ async def pre_answer_level(session: AsyncSession, user_id: str) -> int:
     if not user_id:
         raise ValueError("user_id must be a non-empty string")
     profile = await _lock_profile(session, user_id)
-    return _FIRST_LEVEL if profile is None else profile.level
+    return _FIRST_LEVEL if profile is None else level_from_xp(profile.total_xp)
 
 
 def _snapshot(profile: UserGameProfile) -> ProfileSnapshot:
@@ -450,9 +469,13 @@ async def record_answer(
         is_correct=is_correct,
         xp_delta=decision.xp_delta,
         total_xp=profile.total_xp,
-        level=profile.level,
+        # H1: both levels are the D-1 curve over the total they belong to, never a
+        # stored column and never the seam's own claim. ``decision.level`` still lands
+        # in ``user_game_profile.level`` (the denormalization) and is still validated
+        # to be >= 1, but no number on the wire reads it.
+        level=level_from_xp(decision.total_xp),
         previous_total_xp=before.total_xp,
-        previous_level=before.level,
+        previous_level=level_from_xp(before.total_xp),
         current_streak=profile.current_streak,
         best_streak=profile.best_streak,
         correct_count=profile.correct_count,

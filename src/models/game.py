@@ -59,8 +59,12 @@ class UserGameProfile(Base):
 
     * ``total_xp`` — lifetime XP, always a multiple of 4 (D-8); starts at 0
       (D-1/OQ-3).
-    * ``level`` — pure function of ``total_xp`` (D-1), recomputed inside the
-      answer transaction (US-30), never below 1.
+    * ``level`` — pure function of ``total_xp`` (D-1), never below 1. Stored by the
+      answer transaction (US-30) as a **denormalization** for raw-SQL readers; every
+      report path — ``/answer``, ``/profile``, ``/me`` and the leaderboard — derives
+      it from ``total_xp`` with :func:`~src.services.level_service.level_from_xp` and
+      reads this column nowhere (Phase 2b H1) — see
+      ``src/services/game_service.py`` ("One level, one source").
     * ``current_streak`` — consecutive correct answers, reset to 0 by any
       incorrect answer; no negative streak (D-5).
     * ``best_streak`` — high-water mark, never reset, always ``>= current_streak``.

@@ -26,8 +26,11 @@ not:
   in this service, so a future non-HTTP caller cannot ask for the whole table.
 
 The level on each row is derived from ``total_xp`` by the D-1 curve, exactly as
-:mod:`~src.services.profile_service` derives it for the row's owner, so the board
-and a player's own ``/profile`` can never disagree about what level 1320 XP is.
+:mod:`~src.services.profile_service` derives it for the row's owner and as
+:mod:`~src.services.game_service` derives it on the write side (Phase 2b H1) — so the
+board, a player's own ``/profile``, ``/me`` and their next ``/answer`` response can
+never disagree about what level 1320 XP is, not even for a row whose stored ``level``
+column says something else.
 
 Users without a profile row are absent from the board by design (an ``INNER JOIN``
 on ``users``): the lazy row of US-28 AC-3 is created by the first answer, and

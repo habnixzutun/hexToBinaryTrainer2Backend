@@ -664,6 +664,78 @@ async def test_leaderboard_level_is_derived_from_total_xp(
 
 
 # --------------------------------------------------------------------------- #
+# Phase 2b M1 (review H1): the stored ``level`` is a denormalization, not a fact
+# --------------------------------------------------------------------------- #
+
+# The row a hand-run ``UPDATE user_game_profile SET level = 1``, a US-41 fixture or a
+# future writer can produce: 1320 XP is level 6 on the D-1 curve (``cum(6)`` = 1320),
+# and the stored column says 1. Every reader of that row has to ignore the column and
+# derive from the total, or the four report paths tell four stories about one player.
+DIVERGENT_SEED: dict[str, int] = {**PROFILE_GOLDEN_SEED, "level": 1}
+
+# ``GET /api/user/me`` (US-37) is owned by tests/test_user_me.py; it appears here only
+# because H1 is a claim about ALL FOUR views of one row, and /me is one of them.
+ME_URL = "/api/user/me"
+# The six economy fields US-37 froze — the intersection of /answer, /profile and /me.
+ME_ECONOMY_FIELDS: tuple[str, ...] = (
+    "total_xp",
+    "level",
+    "current_streak",
+    "best_streak",
+    "correct_count",
+    "incorrect_count",
+)
+
+
+async def test_a_divergent_stored_level_is_reported_as_derived(
+    auth_client: AsyncClient, seeded_db
+):
+    """H1 regression: every read derives ``level`` from ``total_xp``, never the column.
+
+    The seed is ``PROFILE_GOLDEN_SEED`` with its stored level contradicted, so the
+    expectation is the SAME plan literal as the consistent row's: ``PROFILE_GOLDEN``
+    byte for byte, plus the leaderboard entry
+    ``test_leaderboard_entry_shape_has_no_points_and_no_pii`` already demands. If any
+    of the three reads ever starts trusting ``user_game_profile.level``, this test goes
+    red while every consistent-row test stays green — and that is exactly the
+    divergence a manual ``UPDATE``, a US-41 fixture or a future writer would ship
+    silently.
+    """
+    _add_profile(seeded_db, USER_ID, **DIVERGENT_SEED)
+    await seeded_db.commit()
+
+    profile = (await auth_client.get(PROFILE_URL)).json()
+    me = (await auth_client.get(ME_URL)).json()
+    board = (await auth_client.get(LEADERBOARD_URL)).json()["entries"]
+    entry = next(row for row in board if row["user_id"] == USER_ID)
+
+    # US-35: the whole body, not just the level — the span pair and the ``unlocks``
+    # filter are children of the derived level and have to follow it.
+    assert profile == PROFILE_GOLDEN
+    # US-37: the six economy fields /me carries, straight from the same literals.
+    assert {key: me[key] for key in ME_ECONOMY_FIELDS} == {
+        key: PROFILE_GOLDEN[key] for key in ME_ECONOMY_FIELDS
+    }
+    # US-36: the rank, with no ``points`` and the same derived level.
+    assert entry == {
+        "user_id": USER_ID,
+        "username": USER_USERNAME,
+        "total_xp": 1320,
+        "level": 6,
+        "correct_count": 42,
+        "incorrect_count": 5,
+    }
+
+    # And the row was left exactly as seeded: a read reports, it never repairs.
+    stored_level = (
+        await seeded_db.execute(
+            select(UserGameProfile.level).where(UserGameProfile.user_id == USER_ID)
+        )
+    ).scalar_one()
+    assert stored_level == 1
+
+
+# --------------------------------------------------------------------------- #
 # The service-side half of each bound (US-35/US-36, no HTTP in between)
 # --------------------------------------------------------------------------- #
 # Both guards are unreachable over the wire — the bearer parser rejects a subjectless

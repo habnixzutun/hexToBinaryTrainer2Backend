@@ -13,16 +13,17 @@ they cannot tell two different stories about the same row:
 Two decisions live here and are worth stating, because both are invisible in the
 signatures:
 
-**The level is derived, never read.** ``user_game_profile.level`` is stored (the
-answer transaction writes it, US-30), but the D-1 curve makes it a *function* of
-``total_xp``, so the read side recomputes it with
-:func:`~src.services.level_service.level_from_xp` and every number that hangs off
-it — ``xp_in_level``, ``xp_required_for_next_level`` (OQ-8: the **span**, not a
-cumulative threshold) and the ``unlocks`` filter — comes from that one function
-call. A row whose stored level ever disagreed with its own ``total_xp`` (a writer
-outside the economy path) would then be reported consistently rather than as two
-contradicting facts, and ``/answer`` and ``/profile`` keep telling the same story
-by construction.
+**The level is derived, never read.** The D-1 curve makes ``level`` a *function* of
+``total_xp``, so every caller recomputes it with
+:func:`~src.services.level_service.level_from_xp`, and every number that hangs off it
+— ``xp_in_level``, ``xp_required_for_next_level`` (OQ-8: the **span**, not a
+cumulative threshold) and the ``unlocks`` filter — comes from that one function call.
+The stored ``user_game_profile.level`` column is a **denormalization** the answer
+transaction still writes (US-30) and nothing on any report path reads: level is derived
+from ``total_xp`` everywhere, so ``/answer``, ``/profile``, ``/me`` and the leaderboard
+**by construction** tell the same story — even if the stored column diverges (manual
+SQL, a US-41 fixture, a future writer).
+``tests/test_game.py::test_a_divergent_stored_level_is_reported_as_derived`` pins it.
 
 **A read never writes.** The profile row is created lazily by the first
 ``POST /api/game/answer`` (US-28 AC-3). A missing row therefore answers the zero
