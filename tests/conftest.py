@@ -20,6 +20,11 @@ NEVER point the tests at the development Postgres on port 5432 (database
 
 US-05: Settings now uses factory pattern (get_settings()) instead of
 module-level instantiation.
+
+``ENV_FILE`` is pinned to a path that does not exist for the whole session (see
+"Env-file isolation" below), so the developer's gitignored ``.env`` never reaches
+``Settings`` and local runs behave exactly like CI. Extra config for the suite
+goes into ``.env.test`` (priority 2), never into ``ENV_FILE``.
 """
 
 import asyncio
@@ -37,11 +42,30 @@ logger = logging.getLogger(__name__)
 # Must run BEFORE importing src.config / src.database.engine: engine.py
 # instantiates Settings and creates its engine at module import time.
 
-TEST_ENV_FILE = Path(__file__).resolve().parent.parent / ".env.test"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+TEST_ENV_FILE = REPO_ROOT / ".env.test"
 
 # Target databases whose name lacks this marker are refused, because the
 # migration tests destructively reset the public schema.
 TEST_DB_NAME_MARKER = "test"
+
+# --- Env-file isolation -------------------------------------------------------
+# src/config.py evaluates ``env_file=os.environ.get("ENV_FILE", ".env")`` ONCE, at
+# class-creation time (it lands in ``Settings.model_config``). Since 91e9ca1 that
+# default is the developer's gitignored ``.env`` -- which really carries a
+# JWT_SECRET -- so pydantic-settings found a usable secret on disk even in tests
+# that clear ``os.environ``. The "no JWT_SECRET anywhere -> ValueError" tests in
+# tests/test_settings.py therefore silently stopped asserting anything; CI stayed
+# green only because it has no ``.env``. Pin ENV_FILE to a path that provably does
+# not exist so no env file is read at all and local runs behave exactly like CI.
+# (A missing file is silently skipped by pydantic-settings; an existing file would
+# be caught by the regression guard in tests/test_settings.py.)
+#
+# Deliberately an assignment, not a setdefault: an ``ENV_FILE`` exported in a
+# developer shell would re-introduce the exact leak this pin prevents. Extra config
+# for the suite belongs in ``.env.test`` (priority 2 below), never in ENV_FILE.
+TEST_ENV_FILE_PIN = REPO_ROOT / ".env.this-file-must-not-exist"
+os.environ["ENV_FILE"] = str(TEST_ENV_FILE_PIN)
 
 os.environ.setdefault("COOKIE_SECURE", "false")
 # US-01: engine.py calls get_settings() at import time, so JWT_SECRET must be

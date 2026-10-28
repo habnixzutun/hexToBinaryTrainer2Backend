@@ -1,13 +1,12 @@
 """Tests for IP-to-location geolocation services."""
 
-import pytest
 import httpx
+import pytest
 from src.services.geolocation_service import (
     IpApiGeolocationService,
     NullGeolocationService,
     _is_private_ip,
 )
-
 
 # --- NullGeolocationService ---------------------------------------------------
 

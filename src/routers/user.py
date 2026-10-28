@@ -35,6 +35,19 @@ def set_email_service(service: EmailService) -> None:
 
 
 def _extract_bearer_user_id(request: Request) -> str:
+    """The authenticated identity behind ``Authorization: Bearer <token>``.
+
+    Shared by every authenticated endpoint (``/api/user/*``, the legacy game routes
+    and US-33's ``POST /api/game/answer``), which is why every rejection here is a
+    ``401`` and never an exception that escapes to a 500: the caller supplies the
+    header and the token's contents, so each of those escapes would be an
+    attacker-controlled error path. Nothing in here touches the database, so a
+    rejected caller costs no connection and no query (US-33 N17/N18).
+
+    Raises:
+        HTTPException: 401 for a missing/malformed header, an undecodable, expired,
+            wrong-type or subject-less token.
+    """
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
         raise HTTPException(
@@ -59,7 +72,26 @@ def _extract_bearer_user_id(request: Request) -> str:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token type.",
         )
-    return payload["sub"]
+    # Wave 2a review B-2: the subject is verified, not assumed. ``payload["sub"]``
+    # raised ``KeyError`` on a correctly signed, correctly typed access token with no
+    # ``sub`` claim — an unauthenticated caller turning a 401 into a 500, on every
+    # endpoint that shares this parser. Measured against PyJWT 2.15.1, which is what
+    # ``decode_token`` uses: a token whose ``sub`` is absent, or an empty string,
+    # DECODES FINE (so nothing above it rejects it), while a non-string ``sub``
+    # (``None``, ``42``, a list) is already rejected by PyJWT's own ``sub`` validator
+    # with ``InvalidSubjectError`` — a subclass of ``InvalidTokenError``, caught
+    # above as "Invalid token.". The ``isinstance`` check is therefore
+    # defence-in-depth for a library that loosens, and the emptiness check is not: an
+    # empty identity would otherwise flow into the answer endpoint's rate-limit key
+    # (``answer:``) and into ``record_answer``, whose non-empty-identity guard raises
+    # ``ValueError`` — the same 500, one layer down.
+    sub = payload.get("sub")
+    if not isinstance(sub, str) or not sub:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token.",
+        )
+    return sub
 
 
 router = APIRouter(tags=["user"])

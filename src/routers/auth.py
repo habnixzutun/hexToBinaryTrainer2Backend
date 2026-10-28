@@ -126,7 +126,18 @@ async def login(
             ),
         )
 
-    # US-04: Check rate limit (per IP+email combination)
+    # US-04: Check rate limit (per IP+email combination).
+    # Wave 2a review B-1 — RESIDUAL, known and accepted, not an oversight. B-1 moved
+    # ``login_lockout``'s unkeyed purge to the background sweep. THIS call, and the
+    # three like it (register, resend-verification, ``security_notification_service``),
+    # still run ``check``: an unbounded ``DELETE … WHERE expires_at < now`` therefore
+    # remains on every pre-auth auth path. They stay because all four ``check()``
+    # callers are pinned byte-for-byte (R-2) — moving them to ``check_without_cleanup``
+    # is the same verdict without the purge, but it is a US-34 decision, not a review
+    # fix. Why it does not amplify today: the sweep in ``src/main.py``'s lifespan
+    # reclaims every expired row within ``RATE_LIMIT_SWEEP_INTERVAL_SECONDS``, so the
+    # scan reads at most one window plus one interval of rows rather than a table that
+    # grows without bound. Documented in ``rate_limit_service``'s module docstring too.
     rate_limit = RateLimitService(session)
     if not await rate_limit.check(
         f"login:{client_ip}:{body.email}",
