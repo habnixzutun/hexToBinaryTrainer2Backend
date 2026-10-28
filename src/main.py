@@ -12,6 +12,7 @@ from src.migrations.v001_auth_schema import create_migrations_table
 from src.migrations.v001_auth_schema import run_migration as run_v001
 from src.migrations.v002_game_stats import run_migration as run_v002
 from src.migrations.v003_rate_limit import run_migration as run_v003
+from src.migrations.v004_xp_schema import run_migration as run_v004
 from src.models.auth import UserIdentity
 from src.routers.auth import router as auth_router
 from src.routers.game import router as game_router
@@ -31,6 +32,10 @@ async def lifespan(app: FastAPI):
         await run_v001(session)
         await run_v002(session)
         await run_v003(session)
+        # US-27 (D-6 / Rev 3 R-1): ADDITIVE only — creates user_game_profile and
+        # leaves user_stats in place. The DROP belongs to v005, shipped with
+        # US-34 at sprint close.
+        await run_v004(session)
 
     install_email_service(get_settings())
 
