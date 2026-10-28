@@ -623,7 +623,6 @@ async def test_rate_limit_is_per_user(db_session, test_user):
 @pytest.mark.asyncio
 async def test_notification_includes_location_in_email(db_session, test_user):
     """Security notification email contains the resolved location."""
-    from src.services.geolocation_service import NullGeolocationService
 
     class FakeGeoService:
         """Returns a fixed location for any IP."""
