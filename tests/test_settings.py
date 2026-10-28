@@ -11,6 +11,7 @@ startup crash path through :func:`src.config.get_settings`.
 
 import os
 import traceback
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -131,6 +132,45 @@ class TestGetSettings:
         assert not hasattr(config_module, "settings") or not isinstance(
             getattr(config_module, "settings", None), Settings
         )
+
+
+class TestEnvFileIsolation:
+    """Regression guard: the developer's ``.env`` must never reach the suite.
+
+    Root cause (Sprint 4 gate): 91e9ca1 made ``src/config.py`` default to
+    ``env_file=os.environ.get("ENV_FILE", ".env")``. Because ``.env`` is
+    gitignored and holds a real ``JWT_SECRET``, every LOCAL run resolved a
+    secret from disk -- even inside ``patch.dict(os.environ, ..., clear=True)``
+    blocks, since the file is read independently of the process environment.
+    CI (no ``.env``) stayed green while the "missing JWT_SECRET" tests below
+    turned vacuous. ``tests/conftest.py`` pins ``ENV_FILE`` to a path that
+    provably does not exist; this test fails loudly if that pin is ever dropped
+    or if a file appears at the pinned path.
+    """
+
+    def test_settings_reads_no_env_file_during_tests(self):
+        """No env file exists for the session -> env vars are the only source."""
+        env_file = Settings.model_config.get("env_file")
+
+        assert env_file, "tests/conftest.py must pin ENV_FILE for the session"
+        assert not Path(env_file).exists(), (
+            f"Settings would read the env file {env_file!r} during tests. A real "
+            "file here (typically the gitignored .env) supplies JWT_SECRET from "
+            "disk and defeats every 'missing JWT_SECRET -> ValueError' assertion "
+            "in this module."
+        )
+
+    def test_missing_secret_raises_with_cleared_environment(self):
+        """Cleared env + no env file -> deterministic ValueError, in CI and locally.
+
+        The minimal reproduction of the leak: with an empty process environment the
+        only way a secret can appear is an env file on disk.
+        """
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(ValueError) as excinfo:
+                Settings()
+
+        assert "JWT_SECRET is required" in str(excinfo.value)
 
 
 class TestJwtSecretSetting:
@@ -265,12 +305,15 @@ class TestJwtSecretLeakRegression:
         assert SENTINEL_DB_PW not in dumped
 
     def test_secret_never_in_traceback(self):
-        """Formatted traceback of the startup crash must stay secret-free."""
+        """Formatted traceback of the startup crash must stay secret-free.
+
+        ``pytest.raises`` (not a bare try/except) so a "nothing raised" outcome
+        reports as a clear failure instead of an UnboundLocalError on ``tb``.
+        """
         with patch.dict(os.environ, {"DB_PW": SENTINEL_DB_PW}, clear=True):
-            try:
+            with pytest.raises(ValidationError) as excinfo:
                 Settings()
-            except ValidationError:
-                tb = traceback.format_exc()
+            tb = "".join(traceback.format_exception(excinfo.value))
 
         assert SENTINEL_DB_PW not in tb
         assert SENTINEL_JWT_SECRET not in tb
