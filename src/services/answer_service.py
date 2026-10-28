@@ -97,7 +97,11 @@ def economy_seam(mode: GameMode, bit_width: int) -> EconomySeam:
     normal case (LV-09a/c) and exactly ``0`` when the floor absorbs the penalty
     (LV-09b). The level is recomputed from the new total by :func:`level_from_xp`
     (D-1), never carried over, which is what makes LV-08 ("demotion impossible")
-    a property of the arithmetic instead of a column.
+    a property of the arithmetic instead of a column. After Phase 2b H1 that
+    recomputation is the seam's *only* job for that field: ``record_answer`` derives the
+    reported level from the total as well, so ``EconomyDecision.level`` is the stored
+    mirror and never a number the wire reads — a seam cannot talk itself into a level
+    its total does not have.
 
     Integer only: no ``float``, no rounding, no snapping (D-8). Both branches keep
     the total in 4z for a reachable total, and the invariant

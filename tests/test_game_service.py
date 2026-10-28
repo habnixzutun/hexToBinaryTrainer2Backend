@@ -120,7 +120,13 @@ def _no_economy(ctx: StreakContext) -> EconomyDecision:
 
 
 def _grant(xp: int, level: int) -> Callable[[StreakContext], EconomyDecision]:
-    """A seam that awards ``xp`` onto the pre-answer total and sets ``level``."""
+    """A seam that awards ``xp`` onto the pre-answer total and sets ``level``.
+
+    H1: the level the outcome *reports* is always ``level_from_xp(total_xp)``, never
+    this argument, so a fake has to hand back the level its own total maps to. A fake
+    that deliberately disagrees is a divergent-row test, and section H owns that case
+    (:func:`test_a_divergent_stored_level_never_reaches_the_gate_or_the_outcome`).
+    """
 
     def _seam(ctx: StreakContext) -> EconomyDecision:
         return EconomyDecision(
@@ -359,19 +365,24 @@ async def test_seam_none_leaves_xp_and_level_untouched(session):
 
 
 async def test_seam_decision_is_persisted_and_reported(session):
-    """The seam's decision is what lands on the row, plus the before-values."""
+    """The seam's decision is what lands on the row, plus the before-values.
+
+    100 XP is ``cum(2)``, so this fake's level claim and the level H1 derives from its
+    total are the same number — the divergence case (a seam whose claim and total
+    disagree) is section H's, not this one's.
+    """
     user_id = await _seed_user(session)
 
     outcome = await record_answer(
-        session, user_id, is_correct=True, economy=_grant(40, 2)
+        session, user_id, is_correct=True, economy=_grant(100, 2)
     )
 
-    assert outcome.xp_delta == 40
-    assert (outcome.total_xp, outcome.level) == (40, 2)
+    assert outcome.xp_delta == 100
+    assert (outcome.total_xp, outcome.level) == (100, 2)
     assert (outcome.previous_total_xp, outcome.previous_level) == (0, 1)
 
     row = await _row(session, user_id)
-    assert (row.total_xp, row.level) == (40, 2)
+    assert (row.total_xp, row.level) == (100, 2)
 
 
 async def test_blocked_penalty_reports_a_zero_delta(session):
@@ -447,7 +458,7 @@ async def test_rejected_seam_decision_rolls_back_nothing_and_writes_nothing(
 ):
     """An existing row keeps its exact state when the decision is rejected."""
     user_id = await _seed_user(session)
-    await record_answer(session, user_id, is_correct=True, economy=_grant(120, 3))
+    await record_answer(session, user_id, is_correct=True, economy=_grant(120, 2))
     before = await _row(session, user_id)
 
     with pytest.raises(ValueError):
@@ -843,7 +854,7 @@ async def test_awaitable_returning_seam_is_rejected_and_commits_nothing(
     byte-identical state with zero COMMITs.
     """
     user_id = await _seed_user(session)
-    await record_answer(session, user_id, is_correct=True, economy=_grant(120, 3))
+    await record_answer(session, user_id, is_correct=True, economy=_grant(120, 2))
     before = await _row(session, user_id)
     ran: list = []
 
@@ -949,8 +960,11 @@ async def test_pre_answer_level_blocks_a_concurrent_writer(session, async_engine
         gate = await pre_answer_level(holder, user_id)  # takes FOR UPDATE
         assert gate == 4
 
+        # 476 + 340 = 816, i.e. level 5 on the curve (cum(5) = 812): the fake's level
+        # claim and H1's derivation from the total agree, so this test stays about the
+        # lock and not about the arithmetic.
         task = asyncio.create_task(
-            record_answer(rival, user_id, is_correct=True, economy=_grant(40, 5))
+            record_answer(rival, user_id, is_correct=True, economy=_grant(340, 5))
         )
         await asyncio.sleep(0.05)
         assert not task.done()  # blocked on the lock the gate holds
@@ -963,3 +977,55 @@ async def test_pre_answer_level_blocks_a_concurrent_writer(session, async_engine
     assert outcome.level == 5
     assert outcome.previous_level == 4
     assert (outcome.current_streak, outcome.correct_count) == (2, 2)
+
+
+# --------------------------------------------------------------------------- #
+# H. Phase 2b H1: one level, one source of truth
+# --------------------------------------------------------------------------- #
+
+
+async def test_a_divergent_stored_level_never_reaches_the_gate_or_the_outcome(session):
+    """A row whose stored ``level`` contradicts its ``total_xp`` changes no answer.
+
+    The row is inserted by raw SQL — the exact shape a hand-run ``UPDATE``, a US-41
+    fixture or a future writer produces: 1320 XP is level 6 (``cum(6)`` = 1320) while
+    the column says 1. Three consumers, one story afterwards:
+
+    * the unlock gate (``pre_answer_level``, finding F-2) reads 6, so the combos the
+      total has already earned stay open — a reader of the column would have refused
+      the 8-bit conversion shelf, whose ``min_level`` is 4 (D-2);
+    * the outcome reports 6 both as ``previous_level`` and as ``level`` — even though
+      the seam it ran was ``_no_economy``, whose decision *claims* the stored 1;
+    * the column keeps its wrong value, because a write path is not a repair job and
+      H1's point is that the report no longer depends on it (the read side leaves the
+      row byte-identical too — see ``tests/test_game.py``).
+    """
+    from src.services.game_service import pre_answer_level
+
+    user_id = await _seed_user(session)
+    await session.execute(
+        text(
+            "INSERT INTO user_game_profile (user_id, total_xp, level, current_streak, "
+            "best_streak, correct_count, incorrect_count) "
+            "VALUES (:u, 1320, 1, 0, 0, 0, 0)"
+        ),
+        {"u": user_id},
+    )
+    await session.commit()
+
+    # The gate: 6, derived from the total — not the stored 1, which would refuse every
+    # combo from level 2 on.
+    assert await pre_answer_level(session, user_id) == 6
+
+    # The answer: ``_no_economy`` decides level 1 (the stored value it was handed),
+    # moves no XP, and the wire still reports the level 1320 maps to.
+    outcome = await record_answer(
+        session, user_id, is_correct=True, economy=_no_economy
+    )
+
+    assert outcome.xp_delta == 0
+    assert outcome.total_xp == 1320
+    assert (outcome.previous_level, outcome.level) == (6, 6)
+
+    row = await _row(session, user_id)
+    assert (row.total_xp, row.level) == (1320, 1)  # the denormalization stays as fed

@@ -140,6 +140,22 @@ Als neuer Teammitglied möchte ich eine aktuelle Architektur-Doku, die isolierte
 
 ---
 
+## US-34-Nachzug: Leaderboard-Index und Schutz des öffentlichen Endpoints
+
+**Priorität:** P1 · **Komplexität:** LOW · **Dependencies:** US-34 (v005 liegt in dieser Story)
+**Quelle:** Sprint-4-Code-Review Phase 2b, Befund **M3** (US-35/36/37, PR zu `d17c10b`) — bewusst **nicht** in diesem PR gefixt, weil die Migration (v005) zu US-34 gehört.
+
+Als Betreiber möchte ich, dass `GET /api/game/leaderboard` auch bei wachsender `user_game_profile`-Tabelle ohne Sort-Schritt bedienbar bleibt, und dass der öffentliche Endpoint (Rev 3 R-3 / OQ-9: keine Auth) gegen Request-Serien abgesichert ist, damit das 30-Sekunden-Polling der Frontends kein DoS-Vektor wird.
+
+**Akzeptanzkriterien:**
+
+1. v005 ersetzt den Ein-Spalten-Index `ix_user_game_profile_total_xp (total_xp DESC)` aus v004 durch den dreispaltigen Index **`(total_xp DESC, incorrect_count ASC, user_id ASC)`** — exakt die Totalordnung, nach der `leaderboard_service.leaderboard_entries()` sortiert. Beleg im PR: `DROP INDEX IF EXISTS` + `CREATE INDEX IF NOT EXISTS`, beides idempotent und über `schema_migrations` registriert; `Index(...)` in `src/models/game.py` analog angepasst (eine Quelle für Migration und ORM).
+2. Der Query-Plan ist vor und nach der Migration mit `EXPLAIN (ANALYZE, BUFFERS)` gemessen und im PR-Text dokumentiert: kein `Sort`-Node mehr auf dem Leaderboard-Zweig, Index-Scan statt Seq-Scan + Sort. (Der Dreier-Index deckt auch die Tiebreaks; ein reiner `total_xp`-Index muss die Zeilen trotzdem noch sortieren.)
+3. **Optional, PO-Entscheidung (OQ-9):** `Cache-Control`/`ETag` **oder** ein Per-IP-Rate-Limit für den öffentlichen Leaderboard-Endpoint. Begründung: Das validierte `limit` (1..100) begrenzt die **Zeilenmenge** einer Antwort, nicht die **Request-Rate** — ein anonymer Caller kann die teure Sortierung beliebig oft auslösen. Variante A (HTTP-Caching) ist billiger und greift genau beim wiederholten Polling derselben Client-Seite; Variante B schützt die Datenbank, braucht aber eine zweite Begrenzung neben der bestehenden per-identity.
+4. Bestehende Tests bleiben grün; `tests/test_migrations.py` deckt die v005-Idempotenz und die Anwesenheit des neuen Index ab (Spiegelbild zu AC „`total_xp`-Index“ aus US-27).
+
+---
+
 ## Sprint-Reihenfolge und Gate
 
 ```

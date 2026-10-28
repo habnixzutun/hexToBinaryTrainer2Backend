@@ -134,8 +134,26 @@ _COLUMNS = (
     "updated_at",
 )
 
-# The answer endpoint's own path, spelled once.
+# The three paths one economy state is reported on, spelled once each.
 ANSWER_URL = "/api/game/answer"
+PROFILE_URL = "/api/game/profile"
+ME_URL = "/api/user/me"
+
+# The views differ by exactly these fields (Phase 2b M2): /answer is the only one that
+# reports the delta and the unlock it caused, /profile the only one that reports the
+# whole ladder, /me the only one that reports identity (US-37). Everything else is one
+# row seen three times, so the comparison below is a contract and not a coincidence.
+ANSWER_ONLY_FIELDS: tuple[str, ...] = ("xp_delta", "newly_unlocked")
+PROFILE_ONLY_FIELDS: tuple[str, ...] = ("unlocks",)
+# The six economy fields /me carries — the progress pair is not among them (D-1).
+ME_ECONOMY_FIELDS: tuple[str, ...] = (
+    "total_xp",
+    "level",
+    "current_streak",
+    "best_streak",
+    "correct_count",
+    "incorrect_count",
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -303,6 +321,49 @@ async def test_golden_fixture_numbers_agree_with_the_pure_layer(
         payload["xp_in_level"],
         payload["xp_required_for_next_level"],
     ) == xp_progress(expected_total)
+
+
+async def test_answer_then_profile_and_me_agree_field_for_field(
+    client, db, async_engine
+):
+    """M2 (Phase 2b): the write → read contract, one bearer, three endpoints.
+
+    The golden fixture's answer, then the two authenticated reads of the same user —
+    three requests, three transactions, so nothing here can pass on a shared object.
+    ``/profile`` has to be ``/answer`` minus the two answer-only fields; ``/me`` has to
+    match both on the six economy numbers it carries. That is H1 on the wire: the four
+    report paths share the D-1 derivation of ``level`` from ``total_xp``, never a row
+    one of them cached (``tests/test_game.py`` pins the same claim on a divergent
+    stored level).
+    """
+    user_id = await _seed_user(db)
+    await _seed_profile(db, user_id, **GOLDEN_SEED)
+    headers = _headers(user_id)
+
+    answer = (
+        await client.post(ANSWER_URL, json=GOLDEN_REQUEST, headers=headers)
+    ).json()
+    profile = (await client.get(PROFILE_URL, headers=headers)).json()
+    me = (await client.get(ME_URL, headers=headers)).json()
+
+    assert answer == GOLDEN_RESPONSE  # the fixture this contract hangs off
+    assert (answer["total_xp"], answer["level"]) == (1320, 6)
+
+    answer_view = {k: v for k, v in answer.items() if k not in ANSWER_ONLY_FIELDS}
+    profile_view = {k: v for k, v in profile.items() if k not in PROFILE_ONLY_FIELDS}
+    assert profile_view == answer_view
+    assert {k: me[k] for k in ME_ECONOMY_FIELDS} == {
+        k: answer[k] for k in ME_ECONOMY_FIELDS
+    }
+
+    # The ladder follows the derived level, and the row now stores the same number the
+    # three reads reported — the writer and the readers agree by construction (H1).
+    assert profile["unlocks"] == [
+        {"mode": rule.mode, "bit_width": rule.bit_width, "min_level": rule.min_level}
+        for rule in unlocks_for_level(6)
+    ]
+    row = await _row(db, user_id)
+    assert (row.total_xp, row.level) == (1320, 6)
 
 
 @pytest.mark.parametrize(
