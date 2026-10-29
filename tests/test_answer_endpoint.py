@@ -215,6 +215,10 @@ async def client(async_engine):
     the point of Rev 3 R-2, and overriding both against one engine keeps the
     limiter's and the answer's isolation real (two sessions, two transactions)
     while staying inside the test database.
+
+    ``leaderboard_rate_limit_session`` is also overridden (Security Review 2026-10-29)
+    because the public leaderboard endpoint now has per-IP rate limiting for flood
+    protection, and tests need to use the same session override as the other endpoints.
     """
     from src.main import app
 
@@ -228,6 +232,9 @@ async def client(async_engine):
 
     app.dependency_overrides[get_db] = _session
     app.dependency_overrides[answer_rate_limit_session] = _session
+    # Import here to avoid circular dependency
+    from src.routers.game import leaderboard_rate_limit_session
+    app.dependency_overrides[leaderboard_rate_limit_session] = _session
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c

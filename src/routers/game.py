@@ -26,6 +26,7 @@ test can reach without HTTP.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.engine import AsyncSessionLocal, get_db
@@ -56,6 +57,11 @@ from src.services.leaderboard_service import (
 )
 from src.services.profile_service import load_snapshot, profile_response
 from src.services.rate_limit_service import RateLimitService
+
+# Leaderboard flood protection: 60 requests per IP per minute
+# (Security Review 2026-10-29: public endpoint needs abuse control beyond auth)
+LEADERBOARD_RATE_LIMIT = 60
+LEADERBOARD_RATE_WINDOW_SECONDS = 60
 
 router = APIRouter(prefix="/api/game", tags=["game"])
 
@@ -106,6 +112,17 @@ async def answer_rate_limit_session():
     ``src/database/engine.py`` sizes for. Holding both at once is what an uncommitted
     limiter session would do, and it is the failure mode the pool probes against
     ``pool_size=1`` in the engine tests.
+    """
+    async with AsyncSessionLocal() as session:
+        yield session
+
+
+async def leaderboard_rate_limit_session():
+    """Rate limiter session for the public leaderboard (Security Review 2026-10-29).
+
+    Same pattern as ``answer_rate_limit_session`` — the leaderboard is public (PO
+    decision R-3/OQ-9) but needs abuse control beyond the bounded ``limit`` parameter.
+    Per-IP rate limiting at 60/min prevents pool saturation from unauthenticated floods.
     """
     async with AsyncSessionLocal() as session:
         yield session
@@ -261,14 +278,16 @@ async def get_profile(
     summary="Public top-XP ranking (Sprint 4 economy)",
 )
 async def get_leaderboard(
+    request: Request,
     limit: int = Query(
         default=LEADERBOARD_DEFAULT_LIMIT,
         ge=LEADERBOARD_MIN_LIMIT,
         le=LEADERBOARD_MAX_LIMIT,
         description="How many entries to return, 1..100.",
     ),
+    rate_limit_session: AsyncSession = Depends(leaderboard_rate_limit_session),
     session: AsyncSession = Depends(get_db),
-) -> LeaderboardResponseV2:
+) -> JSONResponse:
     """Return the top ``limit`` players by total XP.
 
     **This endpoint is public — no authentication at all** (PO decision 2026-10-27,
@@ -282,6 +301,11 @@ async def get_leaderboard(
     PII — ``username`` plus game numbers, no email — which is what makes public-ness
     defensible in the first place.
 
+    **Flood protection** (Security Review 2026-10-29): per-IP rate limiting at
+    60 requests/min prevents pool saturation from unauthenticated floods. The frontend
+    polls every 30 seconds, so 60/min provides ample headroom while capping abuse.
+    Cache-Control header (30s) reduces redundant requests from legitimate clients.
+
     The path, the ``{entries: [...]}`` wrapper and the public visibility are all
     unchanged from the Sprint-2 board; what changed underneath is the source
     (``user_game_profile``, not the legacy counters table), the total order
@@ -290,6 +314,26 @@ async def get_leaderboard(
     because an alias would only have been removed again by US-34.
 
     Raises:
-        HTTPException: 422 (``limit`` outside 1..100, or not an integer).
+        HTTPException: 422 (``limit`` outside 1..100, or not an integer),
+            429 (over per-IP budget, with ``Retry-After``).
     """
-    return LeaderboardResponseV2(entries=await leaderboard_entries(session, limit))
+    # Per-IP rate limiting for flood protection (Security Review 2026-10-29)
+    client_ip = request.client.host if request.client else "unknown"
+    allowed = await RateLimitService(rate_limit_session).check_without_cleanup(
+        f"leaderboard:{client_ip}",
+        LEADERBOARD_RATE_LIMIT,
+        LEADERBOARD_RATE_WINDOW_SECONDS,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many leaderboard requests from this IP.",
+            headers={"Retry-After": str(LEADERBOARD_RATE_WINDOW_SECONDS)},
+        )
+
+    response = LeaderboardResponseV2(entries=await leaderboard_entries(session, limit))
+    # Cache-Control: 30s matches the frontend poll interval, reducing redundant requests
+    return JSONResponse(
+        content=response.model_dump(),
+        headers={"Cache-Control": "public, max-age=30"},
+    )
