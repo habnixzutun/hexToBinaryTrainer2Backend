@@ -515,6 +515,10 @@ async def client(async_engine, email_service):
     the limiter away would test the economy against a control that does not exist
     in production. ``raise_app_exceptions=False`` keeps an application error inside
     the response, where the assertion can name the request that caused it.
+
+    ``leaderboard_rate_limit_session`` is also overridden (Security Review 2026-10-29)
+    because the public leaderboard endpoint now has per-IP rate limiting for flood
+    protection, and tests need to use the same session override as the other endpoints.
     """
     factory = async_sessionmaker(
         async_engine, class_=AsyncSession, expire_on_commit=False
@@ -526,6 +530,9 @@ async def client(async_engine, email_service):
 
     app.dependency_overrides[get_db] = _session
     app.dependency_overrides[answer_rate_limit_session] = _session
+    # Import here to avoid circular dependency
+    from src.routers.game import leaderboard_rate_limit_session
+    app.dependency_overrides[leaderboard_rate_limit_session] = _session
     transport = ASGITransport(
         app=app, client=(_client_ip(), 123), raise_app_exceptions=False
     )

@@ -170,7 +170,14 @@ async def client(engine, seeded_db):
         async with async_session() as session:
             yield session
 
+    async def override_leaderboard_rate_limit_session():
+        async with async_session() as session:
+            yield session
+
     app.dependency_overrides[get_db] = override_get_db
+    # Import here to avoid circular dependency
+    from src.routers.game import leaderboard_rate_limit_session
+    app.dependency_overrides[leaderboard_rate_limit_session] = override_leaderboard_rate_limit_session
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
