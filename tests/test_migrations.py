@@ -33,6 +33,14 @@ from src.migrations.v004_xp_schema import (
     migration_already_applied as v004_already_applied,
 )
 from src.migrations.v004_xp_schema import run_migration as run_v004
+from src.migrations.v005_drop_user_stats import LEGACY_TABLE
+from src.migrations.v005_drop_user_stats import (
+    MIGRATION_ID as V005_MIGRATION_ID,
+)
+from src.migrations.v005_drop_user_stats import (
+    migration_already_applied as v005_already_applied,
+)
+from src.migrations.v005_drop_user_stats import run_migration as run_v005
 
 
 def get_table_names(sync_conn):
@@ -398,11 +406,21 @@ async def test_v003_is_tracked_and_idempotent(migration_session):
 # ---------------------------------------------------------------------------
 # US-27 (Sprint 4): v004_xp_schema — ADDITIVE XP-economy schema.
 #
-# Plan D-6 / Rev 3 R-1: v004 creates ``user_game_profile`` and LEAVES
-# ``user_stats`` in place. The ``DROP TABLE user_stats`` belongs to v005, shipped
-# together with US-34 at sprint close — nothing in this section may assert that
-# user_stats disappears, and nothing here touches the existing v001-v003 tests
-# (Rev 3 R-10: they contain no user_stats assertions to update).
+# Plan D-6 / Rev 3 R-1 split the schema change in two halves, and each half is
+# tested where it lands: v004 creates ``user_game_profile`` and LEAVES the legacy
+# Sprint-2 counters table in place (this section), and v005 drops it — the
+# destructive half ships with US-34 at sprint close (the section after this one).
+#
+# So nothing in THIS section may assert that the legacy table disappears, and
+# nothing in the v005 section re-asserts that it survives. Rev 3 R-10 left the
+# existing v001-v003 tests untouched because they carry no legacy-table claim.
+#
+# Where a v004 test has to name the table (it pins that the table is still whole),
+# the name comes from ``LEGACY_TABLE`` in the v005 module rather than a literal of
+# its own: US-34's grep acceptance criterion is a promise that no test depends on
+# the legacy table any more, and a repeated literal would make that promise
+# ungreppable. The v002 module stays as it is — it is the historical CREATE, and the
+# one spelling the criterion allows alongside the DROP.
 #
 # Expected DDL below is copied from the US-26 story text and the ORM in
 # ``src/models/game.py``, deliberately as literals.
@@ -559,7 +577,7 @@ async def test_v004_creates_user_game_profile(migration_engine, migration_sessio
 
         # v004 depends on v001 alone: no v002 was applied here, yet the table is
         # complete. Coexistence with the legacy table is pinned by
-        # ``test_v004_keeps_user_stats_whole`` (D-6).
+        # ``test_v004_leaves_the_legacy_counters_table_whole`` (D-6).
 
 
 async def test_v004_ddl_matches_the_orm(migration_engine, migration_session):
@@ -696,11 +714,24 @@ async def test_v004_second_run_leaves_the_ddl_untouched(
     assert second == first
 
 
-async def test_v004_keeps_user_stats_whole(migration_engine, migration_session):
-    """D-6: additive only — user_stats survives with its data, no backfill.
+#: The legacy table's own columns, as v002 declared them. Named here (and not read
+#: out of the v002 module) because this is the CO-EXISTENCE pin: it has to survive a
+#: change to v002's text to keep meaning "the old shape is still on disk".
+LEGACY_COLUMNS = ("user_id", "correct_count", "incorrect_count", "points")
 
-    The legacy rows are neither copied into user_game_profile nor modified: XP is
-    only ever written to the new table by the (future) /answer path.
+
+async def test_v004_leaves_the_legacy_counters_table_whole(
+    migration_engine, migration_session
+):
+    """D-6: additive only — the legacy table survives with its data, no backfill.
+
+    The legacy rows are neither copied into ``user_game_profile`` nor modified: XP
+    is only ever written to the new table by ``/answer`` (US-33). This is the
+    co-existence half of the split; v005's section pins the DROP.
+
+    The table is named through ``LEGACY_TABLE`` (the v005 module) rather than a
+    literal, so the legacy spelling appears exactly twice in the repo: v002, which
+    creates it, and v005, which drops it.
     """
     await create_migrations_table(migration_session)
     await run_v001(migration_session)
@@ -708,8 +739,8 @@ async def test_v004_keeps_user_stats_whole(migration_engine, migration_session):
     await _insert_user(migration_session)
     await migration_session.execute(
         text(
-            "INSERT INTO user_stats (user_id, correct_count, incorrect_count, points) "
-            "VALUES ('v004-user-1', 3, 1, 36)"
+            f"INSERT INTO {LEGACY_TABLE} "
+            f"({', '.join(LEGACY_COLUMNS)}) VALUES ('v004-user-1', 3, 1, 36)"
         )
     )
     await migration_session.commit()
@@ -718,17 +749,17 @@ async def test_v004_keeps_user_stats_whole(migration_engine, migration_session):
 
     async with migration_engine.connect() as conn:
         tables = await conn.run_sync(get_table_names)
-        assert "user_stats" in tables
+        assert LEGACY_TABLE in tables
         assert "user_game_profile" in tables
 
-        columns = await conn.run_sync(get_columns, "user_stats")
-        assert {"user_id", "correct_count", "incorrect_count", "points"} <= set(columns)
+        columns = await conn.run_sync(get_columns, LEGACY_TABLE)
+        assert set(LEGACY_COLUMNS) <= set(columns)
 
     legacy = (
         await migration_session.execute(
             text(
                 "SELECT correct_count, incorrect_count, points "
-                "FROM user_stats WHERE user_id = 'v004-user-1'"
+                f"FROM {LEGACY_TABLE} WHERE user_id = 'v004-user-1'"
             )
         )
     ).one()
@@ -783,7 +814,7 @@ async def test_v004_end_state_ignores_v002(migration_engine, migration_session):
     async with migration_engine.connect() as conn:
         shape_with_v002 = await conn.run_sync(_profile_shape)
 
-    # Path B: pristine schema, no user_stats, v001 -> v004 only
+    # Path B: pristine schema, no legacy table, v001 -> v004 only
     await migration_session.execute(text("DROP SCHEMA public CASCADE"))
     await migration_session.execute(text("CREATE SCHEMA public"))
     await migration_session.commit()
@@ -794,18 +825,20 @@ async def test_v004_end_state_ignores_v002(migration_engine, migration_session):
 
     async with migration_engine.connect() as conn:
         tables = await conn.run_sync(get_table_names)
-        assert "user_stats" not in tables  # v002 never ran here
+        assert LEGACY_TABLE not in tables  # v002 never ran here
         assert "user_game_profile" in tables
         shape_without_v002 = await conn.run_sync(_profile_shape)
 
     assert shape_without_v002 == shape_with_v002
 
 
-async def test_lifespan_runs_v004_after_v003(monkeypatch):
-    """AC-2 wiring: every boot applies v004, in order, after v003 (D-6).
+async def test_lifespan_runs_every_migration_in_plan_order(monkeypatch):
+    """AC-2 wiring (US-27 + US-34): every boot applies v001..v005, in that order.
 
-    Same DB-free technique as ``tests/test_smtp_integration.py``: the migration
-    calls are recorded so the ordering claim is proved without a database.
+    The order IS the D-6 split: v004 (CREATE) has to land before v005 (DROP), and
+    both have to land after the tables they reference. Same DB-free technique as
+    ``tests/test_smtp_integration.py`` — the migration calls are recorded, so the
+    ordering claim is proved without a database.
     """
     from src import main as main_module
 
@@ -843,19 +876,24 @@ async def test_lifespan_runs_v004_after_v003(monkeypatch):
     monkeypatch.setattr(main_module, "run_v002", _record("v002"))
     monkeypatch.setattr(main_module, "run_v003", _record("v003"))
     monkeypatch.setattr(main_module, "run_v004", _record("v004"))
+    monkeypatch.setattr(main_module, "run_v005", _record("v005"))
 
     async with main_module.lifespan(main_module.app):
         pass
 
-    assert order == ["v001", "v002", "v003", "v004"]
+    assert order == ["v001", "v002", "v003", "v004", "v005"]
 
 
-async def test_v004_applies_on_a_real_app_boot(migration_engine, migration_session):
-    """AC-2/AC-3: the real lifespan boots against Postgres and applies v004.
+async def test_the_whole_chain_applies_on_a_real_app_boot(
+    migration_engine, migration_session
+):
+    """US-27 AC-2/AC-3 and US-34 AC-3: the real lifespan boots and applies v001..v005.
 
-    Drives ``src.main.lifespan`` unmocked on the reset schema, so v001..v004 run
-    for real: user_game_profile appears with its CHECKs and index, user_stats is
-    still there, and each version is recorded exactly once.
+    Drives ``src.main.lifespan`` unmocked on the reset schema, so every migration
+    runs for real: ``user_game_profile`` appears with its CHECKs and index, the
+    legacy counters table is GONE (v005's half of D-6), and each version is recorded
+    exactly once. This is the only test here that exercises the production wiring of
+    both halves together — the unit tests below run the modules directly.
     """
     from src import main as main_module
     from src.database.engine import engine as app_engine
@@ -873,10 +911,10 @@ async def test_v004_applies_on_a_real_app_boot(migration_engine, migration_sessi
             assert {
                 "users",
                 "user_identities",
-                "user_stats",
                 "rate_limit_attempt",
                 "user_game_profile",
             } <= set(tables)
+            assert LEGACY_TABLE not in tables  # US-34: v005 ran in the lifespan
 
             constraints = await conn.run_sync(_catalog_constraints, "user_game_profile")
             assert {
@@ -903,25 +941,26 @@ async def test_v004_applies_on_a_real_app_boot(migration_engine, migration_sessi
         "v002_game_stats",
         "v003_rate_limit",
         "v004_xp_schema",
+        "v005_drop_user_stats",
     ]
 
 
-async def test_legacy_game_endpoints_survive_the_v004_boot(
+async def test_the_economy_endpoints_answer_on_a_real_app_boot(
     migration_session,
 ):
-    """AC-3: /correct, /incorrect, /leaderboard and /api/user/me still work.
+    """US-34 AC-3/AC-4 end to end: after a real boot the economy is the only game.
 
-    The whole point of the additive split (Rev 3 R-1): with v004 wired in, the
-    legacy writers keep reading and writing user_stats, and they do NOT touch
-    user_game_profile — XP is only ever written to the new table by /answer
-    (US-33). Runs against the real app and the real Postgres test DB, no
-    dependency override, after a genuine lifespan boot.
+    The additive-split claim this test used to carry (the legacy writers still serve
+    beside v004) is the half US-34 ended, so the same wiring is now asserted from the
+    other side: over the REAL app and the REAL Postgres test DB, with no dependency
+    override and a genuine lifespan boot,
 
-    US-36/US-37 moved the two READ sides onto ``user_game_profile``, so what this
-    test now proves is the co-existence itself: a legacy write leaves the new
-    table empty, and the read sides therefore report the zero state instead of the
-    legacy counters — while the legacy writers keep answering with their own
-    ``points`` until US-34 removes them.
+    * ``POST /api/game/correct`` and ``POST /api/game/incorrect`` are 404 — the
+      removal is in the running application, not merely in the route table that
+      ``tests/test_game.py`` pins;
+    * ``POST /api/game/answer`` writes the XP row, and ``GET /api/user/me`` and
+      ``GET /api/game/leaderboard`` read it back — the trio US-32/33/35/36/37
+      delivered, now on a schema where the legacy table does not exist.
     """
     from httpx import ASGITransport, AsyncClient
     from src import main as main_module
@@ -934,57 +973,337 @@ async def test_legacy_game_endpoints_survive_the_v004_boot(
             pass
 
         await _insert_user(
-            migration_session, user_id="v004-legacy-1", username="v004legacy"
+            migration_session, user_id="us34-boot-1", username="us34boot"
         )
-        headers = {"Authorization": f"Bearer {create_access_token('v004-legacy-1')}"}
+        headers = {"Authorization": f"Bearer {create_access_token('us34-boot-1')}"}
 
         transport = ASGITransport(app=main_module.app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            correct = await client.post(
-                "/api/game/correct", json={"bits": 8}, headers=headers
-            )
-            assert correct.status_code == 200, correct.text
-            assert correct.json()["points"] == 8
-            assert correct.json()["correct_count"] == 1
+            for legacy_path in ("/api/game/correct", "/api/game/incorrect"):
+                refused = await client.post(
+                    legacy_path, json={"bits": 8}, headers=headers
+                )
+                assert refused.status_code == 404, (legacy_path, refused.text)
+                assert refused.json() == {"detail": "Not Found"}
 
-            incorrect = await client.post(
-                "/api/game/incorrect", json={"bits": 4}, headers=headers
+            # a level-1 combination: the unlock gate (D-2) refuses everything wider,
+            # and this user has no XP yet, so the gate runs before the economy does.
+            answer = await client.post(
+                "/api/game/answer",
+                json={"mode": "hex_to_bin", "bit_width": 4, "is_correct": True},
+                headers=headers,
             )
-            assert incorrect.status_code == 200, incorrect.text
-            # legacy formula: 8 - (4 * 4)
-            assert incorrect.json()["points"] == -8
-            assert incorrect.json()["incorrect_count"] == 1
+            assert answer.status_code == 200, answer.text
+            xp = answer.json()["total_xp"]
+            assert xp > 0, answer.text
+            assert answer.json()["level"] == 1  # one answer cannot reach L2 (cum 100)
 
             me = await client.get("/api/user/me", headers=headers)
             assert me.status_code == 200, me.text
-            payload = me.json()
-            # US-37: /me reads user_game_profile, which the legacy writers never
-            # touched -> the economy zero state, and no ``points`` key at all.
-            assert payload["total_xp"] == 0
-            assert payload["level"] == 1
-            assert payload["current_streak"] == 0
-            assert payload["best_streak"] == 0
-            assert payload["correct_count"] == 0
-            assert payload["incorrect_count"] == 0
-            assert "points" not in payload
+            assert me.json()["total_xp"] == xp
+            assert me.json()["level"] == 1
+            assert me.json()["current_streak"] == 1
+            assert me.json()["best_streak"] == 1
+            assert "points" not in me.json()
 
-            # the leaderboard stays public (R-3/OQ-9) and now sorts by total_xp;
-            # the legacy user has no profile row, so it is not on the board.
+            # the leaderboard stays public (R-3/OQ-9) and sorts by total_xp, so the
+            # player who just answered is on it and no legacy field rides along.
             board = await client.get("/api/game/leaderboard")
             assert board.status_code == 200, board.text
             assert "points" not in board.text
-            assert all(
-                row["user_id"] != "v004-legacy-1" for row in board.json()["entries"]
-            )
+            rows = {row["user_id"]: row for row in board.json()["entries"]}
+            assert rows["us34-boot-1"]["total_xp"] == xp
 
         profile_rows = (
             await migration_session.execute(
                 text(
                     "SELECT COUNT(*) FROM user_game_profile "
-                    "WHERE user_id = 'v004-legacy-1'"
+                    "WHERE user_id = 'us34-boot-1'"
                 )
             )
         ).scalar_one()
-        assert profile_rows == 0
+        assert profile_rows == 1
     finally:
         await app_engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# US-34 (Sprint close): v005_drop_user_stats — the DESTRUCTIVE half of D-6.
+#
+# Legal only once every reader and writer of the legacy counters is gone, which is
+# what US-32/US-33 (write side) and US-35/US-36/US-37 (read side) delivered. Like
+# v004, the migration must be idempotent (the lifespan re-runs it every boot), must
+# not depend on the history that got it here (a fresh install never saw v002), and
+# must leave the table it does NOT own alone.
+# ---------------------------------------------------------------------------
+
+
+async def test_v005_reports_not_applied_on_a_pristine_schema(migration_session):
+    """The first-boot probe survives a schema with no ``schema_migrations`` at all.
+
+    The lifespan creates that table before it runs any migration, so this is the
+    defensive half of the shared pattern (same shape as v001-v004): "unknown because
+    untracked" must read as NOT APPLIED rather than raise, or a fresh install could
+    never reach its own first migration.
+    """
+    assert await v005_already_applied(migration_session) is False
+
+
+async def test_v005_drops_the_legacy_table(migration_engine, migration_session):
+    """US-34 AC-1: after v005 the legacy table is gone, the economy table stands."""
+    await create_migrations_table(migration_session)
+    await run_v001(migration_session)
+    await run_v002(migration_session)
+    await run_v003(migration_session)
+    await run_v004(migration_session)
+
+    async with migration_engine.connect() as conn:
+        before = await conn.run_sync(get_table_names)
+    assert LEGACY_TABLE in before  # the precondition v005 is allowed to act on
+
+    await _insert_user(migration_session)
+    await migration_session.execute(
+        text(
+            f"INSERT INTO {LEGACY_TABLE} ({', '.join(LEGACY_COLUMNS)}) "
+            "VALUES ('v004-user-1', 3, 1, 36)"
+        )
+    )
+    await migration_session.commit()
+
+    await run_v005(migration_session)
+
+    async with migration_engine.connect() as conn:
+        tables = await conn.run_sync(get_table_names)
+        assert LEGACY_TABLE not in tables
+        assert "user_game_profile" in tables
+
+        # every table v001-v004 built is still there: a leaf DROP needs no CASCADE,
+        # and if one had been written the dependent objects would say so here.
+        for survivor in (
+            "users",
+            "user_identities",
+            "user_refresh_tokens",
+            "password_reset_tokens",
+            "user_audit_log",
+            "rate_limit_attempt",
+        ):
+            assert survivor in tables, survivor
+
+        columns = await conn.run_sync(get_columns, "users")
+    assert {"id", "username", "email"} <= set(columns)
+
+
+async def test_v005_takes_the_legacy_rows_with_it(migration_session):
+    """D-6 / BE-11: no backfill, no compatibility view — the rows simply go.
+
+    The co-existence window wrote XP to ``user_game_profile`` exclusively, so the
+    dropped counters have no target. What this pins is the ABSENCE of a silent
+    half-measure: after the DROP neither the table nor a copy of its data exists.
+    """
+    await create_migrations_table(migration_session)
+    await run_v001(migration_session)
+    await run_v002(migration_session)
+    await run_v004(migration_session)
+    await _insert_user(migration_session)
+    await migration_session.execute(
+        text(
+            f"INSERT INTO {LEGACY_TABLE} ({', '.join(LEGACY_COLUMNS)}) "
+            "VALUES ('v004-user-1', 3, 1, 36)"
+        )
+    )
+    await migration_session.commit()
+
+    await run_v005(migration_session)
+
+    profiles = (
+        await migration_session.execute(
+            text(
+                "SELECT total_xp, correct_count, incorrect_count "
+                "FROM user_game_profile WHERE user_id = 'v004-user-1'"
+            )
+        )
+    ).all()
+    assert profiles == []  # no data migration in either direction (D-6)
+
+
+async def test_v005_is_tracked_and_idempotent(migration_session):
+    """US-34 AC-2: re-running is a no-op that records exactly one row.
+
+    The lifespan re-runs every migration on every boot, so the SECOND run has to
+    return before it reaches the DDL — and a plain ``DROP TABLE`` without the
+    ``IF EXISTS`` guard would raise there even on a database that did have the
+    table.
+    """
+    await create_migrations_table(migration_session)
+    await run_v001(migration_session)
+    await run_v002(migration_session)
+
+    assert await v005_already_applied(migration_session) is False
+
+    await run_v005(migration_session)
+    assert await v005_already_applied(migration_session) is True
+    assert V005_MIGRATION_ID == "v005_drop_user_stats"
+
+    await run_v005(migration_session)  # second boot: must not raise
+
+    result = await migration_session.execute(
+        text("SELECT COUNT(*) FROM schema_migrations WHERE version = :v"),
+        {"v": V005_MIGRATION_ID},
+    )
+    assert result.scalar() == 1
+
+    applied_at = (
+        await migration_session.execute(
+            text("SELECT applied_at FROM schema_migrations WHERE version = :v"),
+            {"v": V005_MIGRATION_ID},
+        )
+    ).scalar_one()
+    assert applied_at is not None  # same bookkeeping shape as v001-v004
+
+
+async def test_v005_is_a_no_op_on_a_database_that_never_ran_v002(
+    migration_engine, migration_session
+):
+    """US-34 AC-2: the end state does not depend on the migration history.
+
+    A fresh install runs v001, v003, v004 and v005 — never v002 — and the ``IF
+    EXISTS`` guard makes the DROP a native no-op there. The same independence v004
+    claims from v002 (US-27 AC-5), asserted the other way round.
+    """
+    await create_migrations_table(migration_session)
+    await run_v001(migration_session)
+    await run_v003(migration_session)
+    await run_v004(migration_session)
+
+    await run_v005(migration_session)  # must not raise
+
+    async with migration_engine.connect() as conn:
+        tables = await conn.run_sync(get_table_names)
+        assert LEGACY_TABLE not in tables
+        assert "user_game_profile" in tables
+        shape_fresh = await conn.run_sync(_profile_shape)
+        versions = (
+            (await conn.execute(text("SELECT version FROM schema_migrations")))
+            .scalars()
+            .all()
+        )
+
+    assert V005_MIGRATION_ID in versions
+
+    # and the no-op did not disturb the economy schema: the same shape a migrated
+    # database reaches through the full chain.
+    await migration_session.execute(text("DROP SCHEMA public CASCADE"))
+    await migration_session.execute(text("CREATE SCHEMA public"))
+    await migration_session.commit()
+
+    await create_migrations_table(migration_session)
+    await run_v001(migration_session)
+    await run_v002(migration_session)  # the legacy table exists, then is dropped
+    await run_v003(migration_session)
+    await run_v004(migration_session)
+    await run_v005(migration_session)
+
+    async with migration_engine.connect() as conn:
+        shape_upgraded = await conn.run_sync(_profile_shape)
+
+    assert shape_upgraded == shape_fresh
+
+
+async def test_v005_leaves_the_economy_rows_untouched(migration_session):
+    """The DROP is scoped to one table: XP, level and streak survive it.
+
+    ``user_game_profile`` shares the ``users`` FK the legacy table also carried, so a
+    ``CASCADE`` written where a plain ``DROP`` suffices would take the economy rows —
+    and every player's XP with them — on a database that had real data.
+    """
+    await create_migrations_table(migration_session)
+    await run_v001(migration_session)
+    await run_v002(migration_session)
+    await run_v004(migration_session)
+    await _insert_user(migration_session)
+    await migration_session.execute(
+        text(
+            "INSERT INTO user_game_profile "
+            "(user_id, total_xp, level, current_streak, best_streak) "
+            "VALUES ('v004-user-1', 1320, 6, 3, 7)"
+        )
+    )
+    await migration_session.commit()
+
+    await run_v005(migration_session)
+
+    row = (
+        await migration_session.execute(
+            text(
+                "SELECT total_xp, level, current_streak, best_streak "
+                "FROM user_game_profile WHERE user_id = 'v004-user-1'"
+            )
+        )
+    ).one()
+    assert (row.total_xp, row.level, row.current_streak, row.best_streak) == (
+        1320,
+        6,
+        3,
+        7,
+    )
+
+
+async def test_v005_keeps_the_user_cascade_after_the_drop(migration_session):
+    """US-34 AC-5: deleting a user still takes the economy row — post-drop re-run.
+
+    The plan asks for US-27 AC-4 to be re-asserted AFTER v005, because the legacy
+    table hung off the same ``users`` FK: a ``DROP`` written with the wrong scope, or
+    a ``CASCADE`` that reached along the FK instead of away from it, would show up
+    here as a deleted player whose XP survived — or as economy rows that vanish with
+    an unrelated table.
+    """
+    await create_migrations_table(migration_session)
+    for run in (run_v001, run_v002, run_v003, run_v004):
+        await run(migration_session)
+    await run_v005(migration_session)
+
+    await _insert_user(migration_session)
+    await migration_session.execute(
+        text(
+            "INSERT INTO user_game_profile "
+            "(user_id, total_xp, level, current_streak, best_streak) "
+            "VALUES ('v004-user-1', 48, 1, 1, 1)"
+        )
+    )
+    await migration_session.commit()
+
+    await migration_session.execute(text("DELETE FROM users WHERE id = 'v004-user-1'"))
+    await migration_session.commit()
+
+    remaining = (
+        await migration_session.execute(
+            text("SELECT COUNT(*) FROM user_game_profile WHERE user_id = 'v004-user-1'")
+        )
+    ).scalar_one()
+    assert remaining == 0
+
+
+async def test_v005_records_nothing_but_its_own_version(migration_session):
+    """The migration's only write to ``schema_migrations`` is its own row."""
+    await create_migrations_table(migration_session)
+    await run_v001(migration_session)
+    await run_v002(migration_session)
+    await run_v004(migration_session)
+
+    await run_v005(migration_session)
+
+    versions = (
+        (
+            await migration_session.execute(
+                text("SELECT version FROM schema_migrations ORDER BY version")
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert versions == [
+        "v001_auth_schema",
+        "v002_game_stats",
+        "v004_xp_schema",
+        V005_MIGRATION_ID,
+    ]

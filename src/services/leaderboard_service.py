@@ -3,9 +3,10 @@
 The rewrite of the Sprint-2 board. Three things changed and one deliberately did
 not:
 
-* **Source** — ``user_game_profile``, not the legacy ``user_stats.points``. XP is
-  the economy's currency now (D-1); ``points`` is gone from the entry shape, with
-  no deprecated alias (Rev 3: an alias would have to be removed again in US-34).
+* **Source** — ``user_game_profile``, not the legacy counters table. XP is the
+  economy's currency now (D-1); the legacy score field is gone from the entry
+  shape, with no deprecated alias (Rev 3: an alias would have to be removed
+  again in US-34).
 * **Ordering** — ``total_xp DESC``, then ``incorrect_count ASC``, then
   ``user_id ASC``. The first tiebreak rewards the cleaner record, and the third
   makes the whole thing a TOTAL order: ``user_id`` is the primary key, so no two
@@ -34,8 +35,9 @@ column says something else.
 
 Users without a profile row are absent from the board by design (an ``INNER JOIN``
 on ``users``): the lazy row of US-28 AC-3 is created by the first answer, and
-"has not played yet" is not a rank. A legacy ``user_stats`` row alone is likewise
-no entry — the co-existence of D-6 is preserved by reading the new table only.
+"has not played yet" is not a rank. This service reads the economy table only —
+which is what made the D-6 co-existence window safe, and what leaves nothing to
+migrate now that US-34 has dropped the legacy one.
 """
 
 from __future__ import annotations
@@ -79,8 +81,9 @@ async def leaderboard_entries(
 
     Returns:
         One :class:`LeaderboardEntryV2` per ranked player, in order, with no
-        ``points`` and no PII field (US-36 AC-4). An empty list when nobody has
-        answered yet — the wrapper is the router's, and it stays ``{entries: []}``.
+        legacy score field and no PII field (US-36 AC-4). An empty list when
+        nobody has answered yet — the wrapper is the router's, and it stays
+        ``{entries: []}``.
 
     Raises:
         ValueError: ``limit`` outside 1..100 (the service-side half of the bound).

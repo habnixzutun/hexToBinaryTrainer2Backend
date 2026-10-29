@@ -27,6 +27,7 @@ must satisfy.
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 
@@ -34,7 +35,7 @@ import pytest
 from sqlalchemy import event, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from src.models.auth import User
-from src.models.game import UserGameProfile, UserStats
+from src.models.game import UserGameProfile
 from src.services.game_service import (
     AnswerOutcome,
     EconomyDecision,
@@ -755,23 +756,45 @@ async def test_missing_user_raises_and_leaves_no_profile(session):
 
 
 # --------------------------------------------------------------------------- #
-# E. D-6 coexistence: the legacy table stays out of it
+# E. D-6 after US-34: the economy table is the ONLY write target
 # --------------------------------------------------------------------------- #
 
 
-async def test_record_answer_never_touches_user_stats(session):
-    """D-6: XP lives in user_game_profile; user_stats is untouched until US-34."""
+async def test_record_answer_writes_only_to_the_economy_table(session, async_engine):
+    """D-6's service half, restated for the post-US-34 schema.
+
+    This used to assert co-existence (``record_answer`` leaves the legacy table
+    alone). US-34 deleted that table and its model, so the guarantee can no longer
+    fail by writing to it — only by acquiring a SECOND write target. The statement
+    stream is what catches that: every INSERT or UPDATE the service emits lands on
+    ``user_game_profile``. Reads of ``users`` (the FK sanity check) are not
+    constrained here; this is a write-side invariant, pinned on the SQL Postgres
+    receives rather than on the ORM calls the code happens to make.
+    """
     user_id = await _seed_user(session)
 
-    for is_correct in (True, True, False):
-        await record_answer(
-            session, user_id, is_correct=is_correct, economy=_no_economy
-        )
+    statements: list[str] = []
 
-    legacy = (
-        await session.execute(select(UserStats).where(UserStats.user_id == user_id))
-    ).scalar_one_or_none()
-    assert legacy is None
+    def _capture(sync_conn, cursor, statement, *args, **kwargs) -> None:
+        statements.append(" ".join(statement.split()))
+
+    event.listen(async_engine.sync_engine, "before_cursor_execute", _capture)
+    try:
+        for is_correct in (True, True, False):
+            await record_answer(
+                session, user_id, is_correct=is_correct, economy=_no_economy
+            )
+    finally:
+        event.remove(async_engine.sync_engine, "before_cursor_execute", _capture)
+
+    writes = [
+        stmt
+        for stmt in statements
+        if re.match(r"^(INSERT|UPDATE)\b", stmt, flags=re.IGNORECASE)
+    ]
+    assert writes, statements  # three answers must have written something
+    for stmt in writes:
+        assert "user_game_profile" in stmt.lower(), stmt
 
     profile = (
         await session.execute(

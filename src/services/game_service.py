@@ -69,9 +69,9 @@ locked, pre-answer level, so a combo the answer itself would unlock still 403s.
 It is a locked read only — it never mutates and never commits, which is what lets
 the 403 path leave the row byte-identical.
 
-The lazy row creation mirrors the legacy ``UserStats`` pattern in
-``src/routers/game.py:72-79`` (untouched until US-34): one row per user, created
-by the first answer that needs it, never eagerly at registration.
+The row is created lazily — one per user, by the first answer that needs it, never
+eagerly at registration (US-28 AC-3). That was the legacy routers' pattern too, and
+it is the reason no registration path had to change when the economy arrived.
 """
 
 import inspect

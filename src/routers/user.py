@@ -2,9 +2,9 @@
 
 ``GET /api/user/me`` is the Sprint-4 read side of US-37 — identity fields plus the
 economy numbers, served from :mod:`src.services.profile_service` so it cannot
-disagree with ``GET /api/game/profile`` (US-35). The legacy ``points`` field and its
-``user_stats`` source are gone from this file; the ``UserStats`` ORM class itself
-stays in :mod:`src.models.game` until US-34 drops the table.
+disagree with ``GET /api/game/profile`` (US-35). The legacy score field and its
+Sprint-2 counters table are gone — from this file first (US-37), then from the
+models and the schema itself (US-34, migration v005).
 """
 
 from datetime import UTC, datetime, timedelta
@@ -142,7 +142,7 @@ async def get_current_user(
 ) -> UserMeResponse:
     """Return the caller's identity plus their economy state.
 
-    US-37 moved this read off the legacy ``user_stats`` counters and onto
+    US-37 moved this read off the legacy Sprint-2 counters and onto
     ``user_game_profile``, through the same
     :func:`~src.services.profile_service.load_snapshot` that serves
     ``GET /api/game/profile`` (US-35). Sharing the loader is the whole point: the six

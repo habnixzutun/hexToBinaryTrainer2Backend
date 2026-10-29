@@ -334,13 +334,13 @@ def test_bit_width_below_one_is_a_range_error_not_a_whitelist_error(
         "xp",
         "xp_delta",
         "total_xp",  # D-7: no client-computed XP, ever
-        "points",  # the legacy column name (US-34 removes it)
+        "points",  # the Sprint-2 score name US-34 retired with its table
         "level",
         "current_streak",
         "best_streak",
         "correct_count",
         "incorrect_count",
-        "bits",  # the legacy /correct body field
+        "bits",  # the body field of the retired legacy writers
         "direction",
         "timestamp",
     ],

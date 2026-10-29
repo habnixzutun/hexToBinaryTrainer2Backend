@@ -1,11 +1,13 @@
 """Tests for ``GET /api/user/me``: identity plus the Sprint-4 economy numbers.
 
-US-37 replaced the legacy ``points`` field with ``{total_xp, level,
-current_streak, best_streak}`` and switched the read from ``user_stats`` to
+US-37 replaced the legacy Sprint-2 score field with ``{total_xp, level,
+current_streak, best_streak}`` and switched the read onto
 ``user_game_profile``, so this endpoint and ``GET /api/game/profile`` (US-35)
-report the same numbers from the same row. The economy literals are copied from
-``docs/sprint4-plan.md`` (D-1, US-33/US-35 golden fixture), never derived from
-``src/``.
+report the same numbers from the same row. US-34 then deleted the legacy column
+outright (with its table and its two writers), so there is no old shape left for
+this file to compare against — the absence assertions below are the whole guard.
+The economy literals are copied from ``docs/sprint4-plan.md`` (D-1, US-33/US-35
+golden fixture), never derived from ``src/``.
 """
 
 from datetime import UTC, datetime
@@ -167,10 +169,11 @@ async def test_me_returns_the_stored_economy(client, seeded_db):
 async def test_me_reports_the_economy_profile_not_the_legacy_counters(
     client, seeded_db
 ):
-    """D-6: ``user_stats`` no longer feeds ``/me``.
+    """D-6/US-34: the Sprint-2 counters no longer feed ``/me`` — there is nothing.
 
-    A streak that was never earned and counts that were never answered must not
-    appear: the row behind these numbers is ``user_game_profile`` and nothing else.
+    The legacy table is dropped and its model is gone, so a streak that was never
+    earned and counts that were never answered cannot reach the response even as a
+    leftover: the row behind these numbers is ``user_game_profile`` and nothing else.
     """
     _add_profile(
         seeded_db,
