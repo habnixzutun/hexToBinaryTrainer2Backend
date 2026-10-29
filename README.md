@@ -1,9 +1,10 @@
 # HexToBinaryTrainer2 Backend
 
 FastAPI backend for a hex-to-binary training application with comprehensive user
-authentication, email verification and a hardened session lifecycle (rotating
+authentication, email verification, a hardened session lifecycle (rotating
 refresh tokens, replay detection, persistent rate limiting, adaptive lockout,
-audit log and security alert emails).
+audit log and security alert emails) — and an XP economy that turns answered
+questions into `total_xp`, levels, streaks and content unlocks.
 
 ## Features
 
@@ -49,11 +50,14 @@ Defense-in-depth layered on top of the authentication system. Details in [Securi
   bounded 1–100
 - **Rate Limited**: 120 answers per user per 60 s window, `429` with `Retry-After`
 
-The Sprint 1 `+bits` / `-4×bits` scoring endpoints were **removed in US-34** (Sprint 4
-close): `POST /api/game/correct` and `POST /api/game/incorrect` and the table behind
-them are gone, with no deprecated alias. The schema change shipped as two migrations —
-`v004` (additive, creates `user_game_profile`) and `v005` (drops the legacy table) —
-and no data was backfilled (the database was empty).
+The Sprint 1 `+bits` / `-4×bits` scoring scheme is **gone** (US-34, Sprint 4 close): both
+of its `POST` routes under `/api/game` and the counters table behind them were deleted with
+no deprecated alias. `POST /api/game/answer` is the economy's only write path now. The
+schema change shipped as two migrations — `v004` (additive, creates `user_game_profile`) and
+`v005` (drops the legacy table) — and no data was backfilled (the database was empty).
+
+Numbers, curves and the golden XP matrix live in
+[docs/xp-economy.md](docs/xp-economy.md).
 
 ## Tech Stack
 
@@ -70,14 +74,16 @@ and no data was backfilled (the database was empty).
 ## Architecture
 
 For detailed architecture documentation, see [docs/architecture.md](docs/architecture.md).
-(Module layout and the auth data model are described there; note that the file still
-carries the Sprint-1 community view.)
+It carries the Sprint-1 knowledge-graph community view (communities 1–5) plus the
+Sprint-4 **Game Economy** community — layering, the three `/api/game` surfaces,
+`user_game_profile` and the two-step v004/v005 migration strategy.
 
 ## Documentation
 
 | Document | Contents |
 |---|---|
-| [docs/architecture.md](docs/architecture.md) | Module/community structure, resolved code gaps, architecture decisions |
+| [docs/xp-economy.md](docs/xp-economy.md) | **Sprint 4 reference tables** — base XP, mode multipliers, streak tiers as rational pairs, golden XP matrix, penalty table, level curve + cumulative, unlock seed, `bit_width` semantics, and where each number lives in code |
+| [docs/architecture.md](docs/architecture.md) | Module/community structure (incl. the Sprint-4 game economy), resolved code gaps, architecture decisions |
 | [docs/adr/001-auth-hardening.md](docs/adr/001-auth-hardening.md) | Sprint 3 threat analysis + decisions DEC-01 … DEC-05 (DB rate limit, aggressive replay revocation, IP backoff, Fernet, cookie handling) |
 | [docs/auth-hardening-plan.md](docs/auth-hardening-plan.md) | Security-hardening backlog (US-01 … US-12) with acceptance criteria |
 | [docs/auth-hardening-test-plan.md](docs/auth-hardening-test-plan.md) | Adversarial test matrix per hardening story |
@@ -492,8 +498,8 @@ used.` or `400 Invalid reset token.` (also for a token of the wrong type), plus
 Profile plus the Sprint-4 economy state of the authenticated user — the same nine
 fields `GET /api/game/profile` reports for the numbers, read from the same
 `user_game_profile` row. The counters are `0`/`level` 1 until the first answer is
-submitted (that row is created lazily by `POST /api/game/answer`; this read never
-inserts).
+submitted (that `user_game_profile` row is created lazily by
+`POST /api/game/answer`; neither read inserts one).
 
 **Headers:** `Authorization: Bearer <access_token>`
 
@@ -664,11 +670,22 @@ strength requirements.`, `400 New password must be different from old password.`
 
 ### Game Endpoints
 
+The `summary` of all three endpoints and every `Field` description of
+`AnswerRequest`/`AnswerResponse` reach the generated OpenAPI document
+(`http://localhost:8000/docs`), including the per-mode `bit_width` contract (bits in
+every mode: 4/8/16/32 for the conversion modes, 8/16/24/32 for `unicode`). Two gaps are
+known and deliberately **not** fixed here, because US-40 is documentation-only — the
+error responses documented below are not declared in the decorator (so Swagger shows
+only `200`/`422` on `/answer` and only `200` on `/profile`), and most
+`ProfileResponse`/`LeaderboardEntryV2` fields carry no `Field(description=…)`. Both are
+filed in [docs/backlog.md](docs/backlog.md) as **TD-03**.
+
 **POST /api/game/answer**
 
 Record one answer and return the caller's full economy state (requires
-authentication). This is the only write path of the economy since US-34 removed the
-Sprint-1 pair `POST /api/game/correct` / `POST /api/game/incorrect`.
+authentication). This is the economy's only write path: US-34 removed the two Sprint-1
+scoring routes that used to sit beside it. Calculation reference:
+[docs/xp-economy.md](docs/xp-economy.md).
 
 **Headers:** `Authorization: Bearer <access_token>`
 
@@ -1078,6 +1095,24 @@ uv run pytest -v
 - `tests/test_security_notifications.py`: Templates, HTML escaping, recipient
   validation, delivery rate limit (US-09)
 
+**Sprint 4 — XP economy**
+- `tests/test_game.py`: The economy route table — `/answer`, `/profile`,
+  `/leaderboard`, and the 404 the removed legacy writers now return (US-34/US-35/US-36)
+- `tests/test_answer_endpoint.py`, `tests/test_input_validation.py`: the
+  authenticate → validate → rate-limit → unlock-gate → transact order, per-mode
+  `bit_width` rejection, `extra="forbid"`, payload budget (US-32/US-33)
+- `tests/test_game_config.py`: the frozen registry — bits in every mode, rational
+  tiers, immutability, no import side effects (US-25)
+- `tests/test_game_profile_models.py`: ORM row + wire schemas, incl. the US-33 golden
+  fixture reproduced byte-for-byte (US-26)
+- `tests/test_xp_engine.py`, `tests/test_level_service.py`,
+  `tests/test_unlock_service.py`: the three pure layers — golden matrix and property
+  tests (§4.6), level curve/floor/clamp (§4.8), unlock ladder (§4.9) (US-29/US-30/US-31)
+- `tests/test_game_service.py`: streak lifecycle — row lock, one commit per answer,
+  lazy profile creation (US-28)
+- `tests/test_user_me.py`: `/api/user/me` agrees with `/api/game/profile` field for
+  field on the same row (US-37)
+
 **Infrastructure**
 - `tests/test_migrations.py`: Schema migrations vs. PostgreSQL (US-09, US-22, v003,
   v004, v005)
@@ -1085,15 +1120,11 @@ uv run pytest -v
 - `tests/test_email_service_ssl.py`: STARTTLS / implicit-TLS handling
 - `tests/test_init_db.py`, `tests/test_smoke.py`, `tests/test_deployment.py`:
   Startup script, app boot, Docker/CI contracts
-- `tests/test_game.py`: The economy route table — `/answer`, `/profile`,
-  `/leaderboard`, and the 404 the removed legacy writers now return (US-34)
-- `tests/test_answer_endpoint.py`, `tests/test_input_validation.py`: the
-  authenticate → validate → rate-limit → unlock-gate → transact order (US-32/US-33)
-- `tests/test_game_profile_models.py`, `tests/test_game_config.py`,
-  `tests/test_xp_engine.py`, `tests/test_level_service.py`,
-  `tests/test_unlock_service.py`, `tests/test_game_service.py`: the Sprint-4 economy
-  units (US-25 … US-28); the two read sides US-35/US-36 are pinned in
-  `tests/test_game.py` and `tests/test_user_me.py` against shared fixtures
+- `tests/test_engine_pool_config.py`: the engine's pool is configured explicitly, and
+  an in-flight answer holds **one** pooled connection — the limiter's session and the
+  answer transaction are sequential, never simultaneous (US-32, Rev 3 R-2)
+- `tests/test_device_info_service.py`, `tests/test_geolocation_service.py`: login-audit
+  enrichment — User-Agent → device string, IP → location (incl. private-IP rejection)
 - `tests/test_architecture_docs.py`: Guards the docs themselves
 
 ### Coverage Requirements
@@ -1107,8 +1138,18 @@ coverage.py loses the trace after the first `await` into the DB layer and
 understates router coverage badly (this made `src/routers/auth.py` look
 like 75 % when existing tests already exercised ~98 % of it).
 
-**Current Test Results** (measured 2026-10-27, `uv run pytest --cov=src`):
-- **340 tests passed**, total coverage **92.83 %** (gate: 80 %)
+**Current Test Results — Sprint 4** (measured 2026-10-29, `uv run pytest`):
+- **1983 tests**, total coverage **95.35 %** (gate: 80 %)
+- `routers/game.py` **100 %** — it left the omit list with US-32/33, because it holds
+  `submit_answer`, which is security-critical (auth → validate → rate-limit → unlock
+  gate → transact) and an omitted file measures nothing. The two legacy Sprint-1
+  handlers that used to live beside it were excluded per handler by
+  `# pragma: no cover` until US-34 deleted them.
+- Sprint 4 added the answer-endpoint, input-validation, profile, leaderboard, pool-config
+  and economy-unit suites on top of the Sprint-3 baseline below.
+
+**Sprint-3 baseline** (measured 2026-10-27, `uv run pytest --cov=src`: 340 tests,
+92.83 %) — still the auth/hardening reference breakdown:
 - Security-critical modules at 100 %: `config.py`, `models/auth.py`,
   `services/auth_service.py`, `services/rate_limit_service.py`,
   `services/security_notification_service.py`, `utils/login_lockout.py`,
@@ -1119,19 +1160,11 @@ like 75 % when existing tests already exercised ~98 % of it).
   `migrations/v003_rate_limit.py` 88 %
 - All authentication and hardening flows are covered, including adversarial
   cases (replay, lockout escalation, tampered/legacy tokens, enumeration timing)
-- Coverage debt below the per-file target, tracked for the next sprint:
-  `main.py` 63 % (lifespan + HTML verification pages), `email_templates.py` 79 %
-  (transactional builders), `migrations/v002_game_stats.py` 33 %
+- Coverage debt below the per-file target *as of that snapshot*: `main.py` 63 %
+  (lifespan + HTML verification pages), `email_templates.py` 79 % (transactional
+  builders), `migrations/v002_game_stats.py` 33 % — the current figures are below
 - Excluded from the coverage run by `pyproject.toml`: `init_db.py`,
   `services/email_service.py` (needs a real SMTP server)
-- `routers/game.py` left that omit list with US-32/33: it holds `submit_answer`,
-  which is security-critical (auth → validate → rate-limit → unlock gate → transact)
-  and an omitted file measures nothing. The two legacy Sprint-1 handlers that lived
-  beside it were excluded per handler by `# pragma: no cover` until US-34 deleted
-  them, so the file is measured whole now (**100 %**). Test counts above are the
-  Sprint-3 snapshot; Sprint 4 adds the answer-endpoint, profile, leaderboard and
-  economy-unit suites — **1983 tests, 95.35 % total** measured 2026-10-29 on this
-  branch (`uv run pytest`).
 
 ## Docker
 
@@ -1180,7 +1213,8 @@ Database migrations run automatically on application startup via the lifespan co
 ## Sprint Progress
 
 > **Numbering note:** this README numbers the delivery streams (Sprint 1 = test
-> foundation, Sprint 2 = authentication system, Sprint 3 = security hardening).
+> foundation, Sprint 2 = authentication system, Sprint 3 = security hardening,
+> Sprint 4 = XP economy).
 > The docs under `docs/` predate that convention: `docs/sprint3-plan.md` calls the
 > *production-readiness* sprint (US-20 … US-22, delivered between Sprint 2 and 3)
 > "Sprint 3", and `docs/auth-hardening-plan.md` numbers four sprints 1 – 4 *inside*
@@ -1265,6 +1299,119 @@ the notification transport wiring (US-09), the low-priority hardening stories
 (US-10 … US-12), `EMAIL_CHANGE_KEY` in the compose stack, the frontend
 `/reset-password` page and the coverage debt.
 
+### Sprint 4 - XP Economy (IN PROGRESS — backend complete)
+
+**Status:** 🟡 US-25 … US-37 and US-40 (this documentation) are merged; **US-41**
+(end-to-end economy suite) and **US-42** (sprint quality gate) are outstanding, and
+US-38/US-39 live in the frontend repository. Plan:
+[docs/sprint4-plan.md](docs/sprint4-plan.md); normative tables:
+[docs/xp-economy.md](docs/xp-economy.md).
+
+**Context:** replaces the Sprint-1 `+bits` / `-4×bits` scoring with an XP economy —
+four modes, streak tiers, a level curve and level-gated content unlocks. All arithmetic
+is exact integer/rational (D-8): every award, penalty and level requirement is a
+multiple of 4, and **no rounding path exists anywhere in the engine**.
+
+**User Stories (this repository):**
+- ✅ US-25: frozen config registry — `services/game_config.py`
+- ✅ US-26: ORM row + wire schemas — `models/game.py`, `models/game_schemas.py`
+- ✅ US-27: migration `v004` (additive XP schema, no backfill)
+- ✅ US-28: streak lifecycle — row lock, one commit per answer (`services/game_service.py`)
+- ✅ US-29: exact-integer XP engine (`services/xp_engine.py`)
+- ✅ US-30: level progression + `cum(level)` floor (`services/level_service.py`)
+- ✅ US-31: unlock ladder (`services/unlock_service.py`)
+- ✅ US-32: input validation + anti-XP-farming (per-mode widths, `extra="forbid"`,
+  4 KiB body cap, 120 answers / 60 s)
+- ✅ US-33: `POST /api/game/answer` — gate order 401 → 422 → 429 → 403 → 200/404
+- ✅ US-34: legacy removal + migration `v005` (drop the counters table)
+- ✅ US-35: `GET /api/game/profile`
+- ✅ US-36: leaderboard v2 by `total_xp` — **still public**
+- ✅ US-37: `/api/user/me` adapted (shares the profile snapshot)
+- ✅ US-40: documentation (this section, `docs/xp-economy.md`, architecture, backlog)
+- ⏭️ US-38/US-39: frontend (sibling repo) — unified submit, XP/streak/level HUD,
+  unlock-gated width/mode selection
+- ⬜ US-41: end-to-end economy integration suite
+- ⬜ US-42: sprint quality gate
+
+**Changelog (Sprint 4):**
+
+*Added*
+- `POST /api/game/answer` — the economy's only write path. Returns the full state:
+  `xp_delta` (signed, post-clamp), `total_xp`, derived `level`, `xp_in_level`,
+  `xp_required_for_next_level`, `current_streak` / `best_streak`, `correct_count` /
+  `incorrect_count` and the `newly_unlocked` delta set
+- `GET /api/game/profile` — the same numbers plus the **full** unlock ladder for the
+  caller's level, so the client never hardcodes the D-2 seed
+- Table `user_game_profile` (migration **`v004`, additive**): `total_xp`, `level`,
+  `current_streak`, `best_streak`, `correct_count`, `incorrect_count`, `updated_at`,
+  four `CHECK` constraints (`total_xp`, `level` and both streak counters `>= 0`) and the
+  index `ix_user_game_profile_total_xp (total_xp DESC)`.
+  The row is created **lazily** by the first answer (US-28 AC-3) — no insert at
+  registration, and `GET /profile` never writes
+- Eight new modules: `services/game_config.py` (frozen registry), `xp_engine.py`,
+  `level_service.py`, `unlock_service.py` (the pure layers), `game_service.py` and
+  `answer_service.py` (row lock, streak lifecycle, wire assembly), `profile_service.py`
+  and `leaderboard_service.py` (the read sides)
+- [docs/xp-economy.md](docs/xp-economy.md) — the reference tables, code-adjacent,
+  cross-referenced from `src/services/game_config.py`
+- Backlog **TD-01** (server-issued challenge nonces / HMAC-signed answers) and
+  **TD-02** (answer-history event table) — see [docs/backlog.md](docs/backlog.md)
+
+*Changed*
+- **Leaderboard v2**: ranked by `total_xp DESC`, then `incorrect_count ASC`, then
+  `user_id ASC` — a total order, so a polling client never sees tied rows reshuffle.
+  Path, the `{entries: [...]}` wrapper and **public visibility are unchanged** (no auth,
+  PO decision Rev 3 R-3 / OQ-9); the abuse controls are the bounded `limit` (1–100,
+  enforced twice) and the absence of PII from the entry shape
+- `GET /api/user/me` reports the economy counters from `user_game_profile` instead of
+  the legacy stats row, and agrees with `/api/game/profile` field for field (US-37)
+- `bit_width` speaks **bits in every mode** (OQ-7): 4/8/16/32 for `hex_to_bin` /
+  `hex_to_dec` / `bin_to_dec`, 8/16/24/32 for `unicode` (= 1–4 bytes). Consequence:
+  `unicode + bit_width: 4` is a loud `422` instead of a valid-but-wrong 128-XP answer,
+  and the frontend's existing `bytes * 8` arithmetic is correct unchanged
+- Answer validation is per-mode (`game_config.VALID_WIDTHS_BY_MODE`), strict-typed
+  (`is_correct` must be a JSON boolean, `bit_width` an int) and `extra="forbid"`, so a
+  client-computed `total_xp` or a body `user_id` cannot be smuggled in
+- The rate limiter's counting entry point on the answer path is
+  `check_without_cleanup`, and it runs on its **own** session — a throttled caller can
+  never hold another caller's row lock, and a 429 leaves no partial state
+
+*Removed*
+- The Sprint-1 `+bits` / `-4×bits` scoring: both `POST` routes under `/api/game` and the
+  counters table behind them, via migration **`v005` (destructive)** — with **no
+  deprecated alias**
+- The legacy score field from every response (me, leaderboard, profile)
+
+*Migration / deployment note*
+- **No backfill, fresh installs only** (D-6): the database was empty, so there is no
+  `points → xp` conversion and no dual-write of values — XP is only ever written to
+  `user_game_profile`
+- The split into `v004` (create) and `v005` (drop) exists so no commit ever left the app
+  unable to boot or the suite red: the legacy routes kept serving until US-33/US-36/US-37
+  had removed every reader and writer (Rev 3 R-1). Both migrations are idempotent via
+  `schema_migrations` and registered after `v003` in the lifespan
+- **Deploy consequence:** `v005` must ship in the **same release train** as the frontend
+  switch (US-38/US-39), or older clients lose their write path mid-rollout
+
+**Results:**
+- **1983 tests, 95.35 % total coverage** (measured 2026-10-29, `uv run pytest`) — gate 80 %
+- Every Sprint-4 economy module measures **100 %**: `routers/game.py`, `models/game.py`,
+  `models/game_schemas.py`, `services/game_config.py`, `services/game_service.py`,
+  `migrations/v005` (the legacy-table drop); plus `migrations/v004_xp_schema.py` 89 %.
+  `routers/game.py` left the coverage omit list with US-32/33 because `submit_answer` is
+  security-critical and an omitted file measures nothing
+- Remaining debt below the per-file target: `main.py` **70 %** (lifespan + HTML
+  verification pages) and `email_templates.py` **79 %** (transactional builders).
+  `migrations/v002_game_stats.py` closed its 33 % gap and sits at **80 %**
+- Gate order pinned at the boundary: 401 with zero SQL (before any session exists),
+  422 before the handler body runs, 429 on a separate transaction, 403 on the **locked
+  pre-answer** level (finding F-2 — an answer worth enough XP to reach the level it asks
+  about is still refused), 200 with one `COMMIT`
+- **Known accepted risk (T-01):** `is_correct` is the client's own assertion and the
+  server has no oracle to check it — no challenge nonce, no answer history. The rate
+  limit bounds request rate, not XP. Hardening is filed as TD-01/TD-02, deliberately
+  not built without production data (YAGNI)
+
 ### Sprint 1 - Test Foundation (COMPLETED)
 
 **Status:** ✅ All tasks completed
@@ -1277,8 +1424,22 @@ the notification transport wiring (US-09), the low-priority hardening stories
 ## Roadmap
 
 Sprint 3 (security hardening) is **done** — see [Sprint Progress](#sprint-3---security-hardening-completed).
+Sprint 4 (XP economy) is **backend-complete, not closed**: US-25 … US-37 and this
+documentation pass are merged, while the frontend stories (US-38/US-39, sibling repo), the
+end-to-end economy suite (US-41) and the sprint quality gate (US-42) are outstanding — see
+[Sprint Progress](#sprint-4---xp-economy-in-progress--backend-complete).
 
-### Sprint 4 (Planned)
+### Open Sprint-4 work
+- US-41: end-to-end economy integration suite (register → lazy profile → streak 1→11 with
+  the exact §4.6 deltas → unlock boundaries at 476 / 3,220 / 25,752 XP → penalty at the
+  floor → 429 leaves no partial state → leaderboard ordering → public-board no-auth
+  regression pin)
+- US-42: sprint quality gate (Section 7 checklist, security-reviewer APPROVE on the
+  US-32/US-33 diff, no `# OQ-x` seam markers left in code)
+- Ship `v005` in the **same release train** as the frontend switch — see the migration
+  note in [Sprint 4](#sprint-4---xp-economy-in-progress--backend-complete)
+
+### Next after Sprint 4
 - OAuth Provider Integration (GitHub, Google) — schema is ready since Sprint 2 (US-09)
 - Phone Authentication (SMS verification)
 - Account Deletion (GDPR compliance)
@@ -1301,8 +1462,8 @@ Sprint 3 (security hardening) is **done** — see [Sprint Progress](#sprint-3---
   brute force), structured JSON logging, ADR 001 status → *Accepted*
 - CAPTCHA after repeated login failures — mitigation for distributed brute force
   (documented as follow-up in ADR 001 DEC-03)
-- Close the coverage debt: `main.py` 63 %, `email_templates.py` 79 %,
-  `migrations/v002_game_stats.py` 33 %
+- Close the coverage debt: `main.py` 70 %, `email_templates.py` 79 % (measured
+  2026-10-29; `migrations/v002_game_stats.py` reached 80 % in Sprint 4)
 
 ## License
 
