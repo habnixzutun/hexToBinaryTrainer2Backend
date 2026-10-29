@@ -81,26 +81,61 @@ from uuid_utils import uuid7
 # Two independent rows of the same table: _check_invariants asserts they agree at
 # every level the journey visits, so a transcription slip in either one surfaces.
 _REQ_TO_NEXT: dict[int, int] = {
-    1: 100, 2: 152, 3: 224, 4: 336, 5: 508, 6: 760, 7: 1140, 8: 1708,
-    9: 2564, 10: 3844, 11: 5768, 12: 8648, 13: 12976, 14: 19460, 15: 29192,
+    1: 100,
+    2: 152,
+    3: 224,
+    4: 336,
+    5: 508,
+    6: 760,
+    7: 1140,
+    8: 1708,
+    9: 2564,
+    10: 3844,
+    11: 5768,
+    12: 8648,
+    13: 12976,
+    14: 19460,
+    15: 29192,
 }
 _CUM: dict[int, int] = {
-    1: 0, 2: 100, 3: 252, 4: 476, 5: 812, 6: 1320, 7: 2080, 8: 3220,
-    9: 4928, 10: 7492, 11: 11336, 12: 17104, 13: 25752, 14: 38728,
-    15: 58188, 16: 87380,
+    1: 0,
+    2: 100,
+    3: 252,
+    4: 476,
+    5: 812,
+    6: 1320,
+    7: 2080,
+    8: 3220,
+    9: 4928,
+    10: 7492,
+    11: 11336,
+    12: 17104,
+    13: 25752,
+    14: 38728,
+    15: 58188,
+    16: 87380,
 }
 
 # D-2 / §4.9: the full 16-row unlock seed, in the table's own order (grouped by
 # mode). ``_ladder_for_level`` filters it; the shelf literals below quote the
 # five non-empty ``newly_unlocked`` deltas the journey produces.
 _UNLOCK_SEED: tuple[tuple[str, int, int], ...] = (
-    ("hex_to_bin", 4, 1), ("hex_to_bin", 8, 4), ("hex_to_bin", 16, 8),
+    ("hex_to_bin", 4, 1),
+    ("hex_to_bin", 8, 4),
+    ("hex_to_bin", 16, 8),
     ("hex_to_bin", 32, 13),
-    ("hex_to_dec", 4, 1), ("hex_to_dec", 8, 4), ("hex_to_dec", 16, 8),
+    ("hex_to_dec", 4, 1),
+    ("hex_to_dec", 8, 4),
+    ("hex_to_dec", 16, 8),
     ("hex_to_dec", 32, 13),
-    ("bin_to_dec", 4, 1), ("bin_to_dec", 8, 4), ("bin_to_dec", 16, 8),
+    ("bin_to_dec", 4, 1),
+    ("bin_to_dec", 8, 4),
+    ("bin_to_dec", 16, 8),
     ("bin_to_dec", 32, 13),
-    ("unicode", 8, 1), ("unicode", 16, 2), ("unicode", 24, 3), ("unicode", 32, 4),
+    ("unicode", 8, 1),
+    ("unicode", 16, 2),
+    ("unicode", 24, 3),
+    ("unicode", 32, 4),
 )
 
 _L2_UNICODE16: tuple[dict[str, Any], ...] = (
@@ -202,10 +237,19 @@ _ME_ECONOMY_FIELDS: tuple[str, ...] = (
     "incorrect_count",
 )
 
-_ME_FIELDS: frozenset[str] = frozenset({
-    "id", "username", "email", "total_xp", "level", "current_streak",
-    "best_streak", "correct_count", "incorrect_count",
-})
+_ME_FIELDS: frozenset[str] = frozenset(
+    {
+        "id",
+        "username",
+        "email",
+        "total_xp",
+        "level",
+        "current_streak",
+        "best_streak",
+        "correct_count",
+        "incorrect_count",
+    }
+)
 
 _BOARD_FIELDS: frozenset[str] = frozenset(
     {"user_id", "username", "total_xp", "level", "correct_count", "incorrect_count"}
@@ -231,13 +275,13 @@ def _check_invariants(body: dict[str, Any], answers: int) -> None:
         assert type(value) is int, (key, value)  # D-8: ints, never floats, never bool
 
     total, level = body["total_xp"], body["level"]
-    assert level == _level_of(total) >= 1                      # D-1 derivation
-    assert _CUM[level] <= total < _CUM[level + 1]              # OQ-4 floor, no leap
-    assert body["xp_in_level"] == total - _CUM[level] >= 0     # LV-10
+    assert level == _level_of(total) >= 1  # D-1 derivation
+    assert _CUM[level] <= total < _CUM[level + 1]  # OQ-4 floor, no leap
+    assert body["xp_in_level"] == total - _CUM[level] >= 0  # LV-10
     assert _CUM[level + 1] - _CUM[level] == _REQ_TO_NEXT[level]
     assert body["xp_required_for_next_level"] == _REQ_TO_NEXT[level]
-    assert body["xp_delta"] % 4 == 0                           # D-8: deltas live in 4z
-    assert body["best_streak"] >= body["current_streak"]       # the high-water mark
+    assert body["xp_delta"] % 4 == 0  # D-8: deltas live in 4z
+    assert body["best_streak"] >= body["current_streak"]  # the high-water mark
     assert body["correct_count"] + body["incorrect_count"] == answers
 
 
@@ -250,148 +294,81 @@ def _check_invariants(body: dict[str, Any], answers: int) -> None:
 # --------------------------------------------------------------------------- #
 # steps 1-6 of US-41, one continuous user; counters are cumulative
 _JOURNEY: tuple[_Step, ...] = (
-    (("hex_to_bin", 4, True),
-     _body(16, 16, 1, 16, 100, 1, 1, 1, 0)),
-    (("hex_to_bin", 4, True),
-     _body(16, 32, 1, 32, 100, 2, 2, 2, 0)),
-    (("hex_to_bin", 4, True),
-     _body(20, 52, 1, 52, 100, 3, 3, 3, 0)),
-    (("hex_to_bin", 4, True),
-     _body(20, 72, 1, 72, 100, 4, 4, 4, 0)),
-    (("hex_to_bin", 4, True),
-     _body(24, 96, 1, 96, 100, 5, 5, 5, 0)),
-    (("hex_to_bin", 4, True),
-     _body(24, 120, 2, 20, 152, 6, 6, 6, 0, _L2_UNICODE16)),
-    (("hex_to_bin", 4, True),
-     _body(24, 144, 2, 44, 152, 7, 7, 7, 0)),
-    (("hex_to_bin", 4, True),
-     _body(32, 176, 2, 76, 152, 8, 8, 8, 0)),
-    (("hex_to_bin", 4, True),
-     _body(32, 208, 2, 108, 152, 9, 9, 9, 0)),
-    (("hex_to_bin", 4, True),
-     _body(32, 240, 2, 140, 152, 10, 10, 10, 0)),
-    (("hex_to_bin", 4, True),
-     _body(40, 280, 3, 28, 224, 11, 11, 11, 0, _L3_UNICODE24)),
-    (("hex_to_bin", 4, False),
-     _body(-8, 272, 3, 20, 224, 0, 11, 11, 1)),
-    (("hex_to_dec", 4, True),
-     _body(48, 320, 3, 68, 224, 1, 11, 12, 1)),
-    (("bin_to_dec", 4, True),
-     _body(128, 448, 3, 196, 224, 2, 11, 13, 1)),
-    (("hex_to_bin", 4, True),
-     _body(20, 468, 3, 216, 224, 3, 11, 14, 1)),
-    (("hex_to_bin", 4, False),
-     _body(-8, 460, 3, 208, 224, 0, 11, 14, 2)),
-    (("hex_to_bin", 4, True),
-     _body(16, 476, 4, 0, 336, 1, 11, 15, 2, _L4_SHELF)),
-    (("bin_to_dec", 8, True),
-     _body(256, 732, 4, 256, 336, 2, 11, 16, 2)),
-    (("bin_to_dec", 8, True),
-     _body(320, 1052, 5, 240, 508, 3, 11, 17, 2)),
-    (("bin_to_dec", 8, True),
-     _body(320, 1372, 6, 52, 760, 4, 11, 18, 2)),
-    (("hex_to_bin", 8, True),
-     _body(48, 1420, 6, 100, 760, 5, 11, 19, 2)),
-    (("bin_to_dec", 8, True),
-     _body(384, 1804, 6, 484, 760, 6, 11, 20, 2)),
-    (("bin_to_dec", 8, True),
-     _body(384, 2188, 7, 108, 1140, 7, 11, 21, 2)),
-    (("bin_to_dec", 8, True),
-     _body(512, 2700, 7, 620, 1140, 8, 11, 22, 2)),
-    (("bin_to_dec", 8, True),
-     _body(512, 3212, 7, 1132, 1140, 9, 11, 23, 2)),
-    (("hex_to_bin", 4, False),
-     _body(-8, 3204, 7, 1124, 1140, 0, 11, 23, 3)),
-    (("hex_to_bin", 4, True),
-     _body(16, 3220, 8, 0, 1708, 1, 11, 24, 3, _L8_SHELF)),
-    (("hex_to_dec", 16, True),
-     _body(192, 3412, 8, 192, 1708, 2, 11, 25, 3)),
-    (("hex_to_dec", 4, True),
-     _body(60, 3472, 8, 252, 1708, 3, 11, 26, 3)),
-    (("bin_to_dec", 16, True),
-     _body(640, 4112, 8, 892, 1708, 4, 11, 27, 3)),
-    (("bin_to_dec", 8, True),
-     _body(384, 4496, 8, 1276, 1708, 5, 11, 28, 3)),
-    (("bin_to_dec", 16, True),
-     _body(768, 5264, 9, 336, 2564, 6, 11, 29, 3)),
-    (("bin_to_dec", 16, True),
-     _body(768, 6032, 9, 1104, 2564, 7, 11, 30, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1024, 7056, 9, 2128, 2564, 8, 11, 31, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1024, 8080, 10, 588, 3844, 9, 11, 32, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1024, 9104, 10, 1612, 3844, 10, 11, 33, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1280, 10384, 10, 2892, 3844, 11, 11, 34, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1280, 11664, 11, 328, 5768, 12, 12, 35, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1280, 12944, 11, 1608, 5768, 13, 13, 36, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1280, 14224, 11, 2888, 5768, 14, 14, 37, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1280, 15504, 11, 4168, 5768, 15, 15, 38, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1280, 16784, 11, 5448, 5768, 16, 16, 39, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1280, 18064, 12, 960, 8648, 17, 17, 40, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1280, 19344, 12, 2240, 8648, 18, 18, 41, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1280, 20624, 12, 3520, 8648, 19, 19, 42, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1280, 21904, 12, 4800, 8648, 20, 20, 43, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1280, 23184, 12, 6080, 8648, 21, 21, 44, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1280, 24464, 12, 7360, 8648, 22, 22, 45, 3)),
-    (("bin_to_dec", 16, True),
-     _body(1280, 25744, 12, 8640, 8648, 23, 23, 46, 3)),
-    (("hex_to_bin", 4, False),
-     _body(-8, 25736, 12, 8632, 8648, 0, 23, 46, 4)),
-    (("hex_to_bin", 4, True),
-     _body(16, 25752, 13, 0, 12976, 1, 23, 47, 4, _L13_SHELF)),
-    (("hex_to_bin", 4, False),
-     _body(0, 25752, 13, 0, 12976, 0, 23, 47, 5)),
+    (("hex_to_bin", 4, True), _body(16, 16, 1, 16, 100, 1, 1, 1, 0)),
+    (("hex_to_bin", 4, True), _body(16, 32, 1, 32, 100, 2, 2, 2, 0)),
+    (("hex_to_bin", 4, True), _body(20, 52, 1, 52, 100, 3, 3, 3, 0)),
+    (("hex_to_bin", 4, True), _body(20, 72, 1, 72, 100, 4, 4, 4, 0)),
+    (("hex_to_bin", 4, True), _body(24, 96, 1, 96, 100, 5, 5, 5, 0)),
+    (("hex_to_bin", 4, True), _body(24, 120, 2, 20, 152, 6, 6, 6, 0, _L2_UNICODE16)),
+    (("hex_to_bin", 4, True), _body(24, 144, 2, 44, 152, 7, 7, 7, 0)),
+    (("hex_to_bin", 4, True), _body(32, 176, 2, 76, 152, 8, 8, 8, 0)),
+    (("hex_to_bin", 4, True), _body(32, 208, 2, 108, 152, 9, 9, 9, 0)),
+    (("hex_to_bin", 4, True), _body(32, 240, 2, 140, 152, 10, 10, 10, 0)),
+    (("hex_to_bin", 4, True), _body(40, 280, 3, 28, 224, 11, 11, 11, 0, _L3_UNICODE24)),
+    (("hex_to_bin", 4, False), _body(-8, 272, 3, 20, 224, 0, 11, 11, 1)),
+    (("hex_to_dec", 4, True), _body(48, 320, 3, 68, 224, 1, 11, 12, 1)),
+    (("bin_to_dec", 4, True), _body(128, 448, 3, 196, 224, 2, 11, 13, 1)),
+    (("hex_to_bin", 4, True), _body(20, 468, 3, 216, 224, 3, 11, 14, 1)),
+    (("hex_to_bin", 4, False), _body(-8, 460, 3, 208, 224, 0, 11, 14, 2)),
+    (("hex_to_bin", 4, True), _body(16, 476, 4, 0, 336, 1, 11, 15, 2, _L4_SHELF)),
+    (("bin_to_dec", 8, True), _body(256, 732, 4, 256, 336, 2, 11, 16, 2)),
+    (("bin_to_dec", 8, True), _body(320, 1052, 5, 240, 508, 3, 11, 17, 2)),
+    (("bin_to_dec", 8, True), _body(320, 1372, 6, 52, 760, 4, 11, 18, 2)),
+    (("hex_to_bin", 8, True), _body(48, 1420, 6, 100, 760, 5, 11, 19, 2)),
+    (("bin_to_dec", 8, True), _body(384, 1804, 6, 484, 760, 6, 11, 20, 2)),
+    (("bin_to_dec", 8, True), _body(384, 2188, 7, 108, 1140, 7, 11, 21, 2)),
+    (("bin_to_dec", 8, True), _body(512, 2700, 7, 620, 1140, 8, 11, 22, 2)),
+    (("bin_to_dec", 8, True), _body(512, 3212, 7, 1132, 1140, 9, 11, 23, 2)),
+    (("hex_to_bin", 4, False), _body(-8, 3204, 7, 1124, 1140, 0, 11, 23, 3)),
+    (("hex_to_bin", 4, True), _body(16, 3220, 8, 0, 1708, 1, 11, 24, 3, _L8_SHELF)),
+    (("hex_to_dec", 16, True), _body(192, 3412, 8, 192, 1708, 2, 11, 25, 3)),
+    (("hex_to_dec", 4, True), _body(60, 3472, 8, 252, 1708, 3, 11, 26, 3)),
+    (("bin_to_dec", 16, True), _body(640, 4112, 8, 892, 1708, 4, 11, 27, 3)),
+    (("bin_to_dec", 8, True), _body(384, 4496, 8, 1276, 1708, 5, 11, 28, 3)),
+    (("bin_to_dec", 16, True), _body(768, 5264, 9, 336, 2564, 6, 11, 29, 3)),
+    (("bin_to_dec", 16, True), _body(768, 6032, 9, 1104, 2564, 7, 11, 30, 3)),
+    (("bin_to_dec", 16, True), _body(1024, 7056, 9, 2128, 2564, 8, 11, 31, 3)),
+    (("bin_to_dec", 16, True), _body(1024, 8080, 10, 588, 3844, 9, 11, 32, 3)),
+    (("bin_to_dec", 16, True), _body(1024, 9104, 10, 1612, 3844, 10, 11, 33, 3)),
+    (("bin_to_dec", 16, True), _body(1280, 10384, 10, 2892, 3844, 11, 11, 34, 3)),
+    (("bin_to_dec", 16, True), _body(1280, 11664, 11, 328, 5768, 12, 12, 35, 3)),
+    (("bin_to_dec", 16, True), _body(1280, 12944, 11, 1608, 5768, 13, 13, 36, 3)),
+    (("bin_to_dec", 16, True), _body(1280, 14224, 11, 2888, 5768, 14, 14, 37, 3)),
+    (("bin_to_dec", 16, True), _body(1280, 15504, 11, 4168, 5768, 15, 15, 38, 3)),
+    (("bin_to_dec", 16, True), _body(1280, 16784, 11, 5448, 5768, 16, 16, 39, 3)),
+    (("bin_to_dec", 16, True), _body(1280, 18064, 12, 960, 8648, 17, 17, 40, 3)),
+    (("bin_to_dec", 16, True), _body(1280, 19344, 12, 2240, 8648, 18, 18, 41, 3)),
+    (("bin_to_dec", 16, True), _body(1280, 20624, 12, 3520, 8648, 19, 19, 42, 3)),
+    (("bin_to_dec", 16, True), _body(1280, 21904, 12, 4800, 8648, 20, 20, 43, 3)),
+    (("bin_to_dec", 16, True), _body(1280, 23184, 12, 6080, 8648, 21, 21, 44, 3)),
+    (("bin_to_dec", 16, True), _body(1280, 24464, 12, 7360, 8648, 22, 22, 45, 3)),
+    (("bin_to_dec", 16, True), _body(1280, 25744, 12, 8640, 8648, 23, 23, 46, 3)),
+    (("hex_to_bin", 4, False), _body(-8, 25736, 12, 8632, 8648, 0, 23, 46, 4)),
+    (("hex_to_bin", 4, True), _body(16, 25752, 13, 0, 12976, 1, 23, 47, 4, _L13_SHELF)),
+    (("hex_to_bin", 4, False), _body(0, 25752, 13, 0, 12976, 0, 23, 47, 5)),
 )
 
 # OQ-4 at cum(2) = 100: the whole penalty 8 is absorbed
 _FLOOR_SEQUENCE: tuple[_Step, ...] = (
-    (("hex_to_bin", 4, True),
-     _body(16, 16, 1, 16, 100, 1, 1, 1, 0)),
-    (("hex_to_bin", 4, True),
-     _body(16, 32, 1, 32, 100, 2, 2, 2, 0)),
-    (("hex_to_dec", 4, True),
-     _body(60, 92, 1, 92, 100, 3, 3, 3, 0)),
-    (("hex_to_bin", 4, False),
-     _body(-8, 84, 1, 84, 100, 0, 3, 3, 1)),
-    (("hex_to_bin", 4, True),
-     _body(16, 100, 2, 0, 152, 1, 3, 4, 1, _L2_UNICODE16)),
-    (("hex_to_bin", 4, False),
-     _body(0, 100, 2, 0, 152, 0, 3, 4, 2)),
+    (("hex_to_bin", 4, True), _body(16, 16, 1, 16, 100, 1, 1, 1, 0)),
+    (("hex_to_bin", 4, True), _body(16, 32, 1, 32, 100, 2, 2, 2, 0)),
+    (("hex_to_dec", 4, True), _body(60, 92, 1, 92, 100, 3, 3, 3, 0)),
+    (("hex_to_bin", 4, False), _body(-8, 84, 1, 84, 100, 0, 3, 3, 1)),
+    (("hex_to_bin", 4, True), _body(16, 100, 2, 0, 152, 1, 3, 4, 1, _L2_UNICODE16)),
+    (("hex_to_bin", 4, False), _body(0, 100, 2, 0, 152, 0, 3, 4, 2)),
 )
 
 # L5 -> L6 at cum(6) = 1320: a level-up, no unlock (R-9)
 _LEVELUP_NO_UNLOCK: tuple[_Step, ...] = (
-    (("hex_to_bin", 4, True),
-     _body(16, 16, 1, 16, 100, 1, 1, 1, 0)),
-    (("hex_to_bin", 4, True),
-     _body(16, 32, 1, 32, 100, 2, 2, 2, 0)),
-    (("bin_to_dec", 4, True),
-     _body(160, 192, 2, 92, 152, 3, 3, 3, 0, _L2_UNICODE16)),
-    (("bin_to_dec", 4, True),
-     _body(160, 352, 3, 100, 224, 4, 4, 4, 0, _L3_UNICODE24)),
-    (("bin_to_dec", 4, True),
-     _body(192, 544, 4, 68, 336, 5, 5, 5, 0, _L4_SHELF)),
-    (("bin_to_dec", 8, True),
-     _body(384, 928, 5, 116, 508, 6, 6, 6, 0)),
-    (("bin_to_dec", 8, True),
-     _body(384, 1312, 5, 500, 508, 7, 7, 7, 0)),
-    (("hex_to_bin", 4, False),
-     _body(-8, 1304, 5, 492, 508, 0, 7, 7, 1)),
-    (("hex_to_bin", 4, True),
-     _body(16, 1320, 6, 0, 760, 1, 7, 8, 1)),
+    (("hex_to_bin", 4, True), _body(16, 16, 1, 16, 100, 1, 1, 1, 0)),
+    (("hex_to_bin", 4, True), _body(16, 32, 1, 32, 100, 2, 2, 2, 0)),
+    (("bin_to_dec", 4, True), _body(160, 192, 2, 92, 152, 3, 3, 3, 0, _L2_UNICODE16)),
+    (("bin_to_dec", 4, True), _body(160, 352, 3, 100, 224, 4, 4, 4, 0, _L3_UNICODE24)),
+    (("bin_to_dec", 4, True), _body(192, 544, 4, 68, 336, 5, 5, 5, 0, _L4_SHELF)),
+    (("bin_to_dec", 8, True), _body(384, 928, 5, 116, 508, 6, 6, 6, 0)),
+    (("bin_to_dec", 8, True), _body(384, 1312, 5, 500, 508, 7, 7, 7, 0)),
+    (("hex_to_bin", 4, False), _body(-8, 1304, 5, 492, 508, 0, 7, 7, 1)),
+    (("hex_to_bin", 4, True), _body(16, 1320, 6, 0, 760, 1, 7, 8, 1)),
 )
 
 # body of the 120th (allowed) answer of a 120x HB-4 correct run
@@ -586,9 +563,7 @@ async def _register_verify_login(
     verify = await client.post(_VERIFY_URL, json={"token": token})
     assert verify.status_code == 200, verify.text
 
-    login = await client.post(
-        _LOGIN_URL, json={"email": email, "password": _PASSWORD}
-    )
+    login = await client.post(_LOGIN_URL, json={"email": email, "password": _PASSWORD})
     assert login.status_code == 200, login.text
     assert login.json()["token_type"] == "bearer"
 
@@ -696,9 +671,14 @@ async def test_journey_from_registration_to_the_leaderboard(client, db, email_se
     zero = await client.get(_PROFILE_URL, headers=headers)
     assert zero.status_code == 200, zero.text
     assert zero.json() == {
-        "total_xp": 0, "level": 1, "xp_in_level": 0,
-        "xp_required_for_next_level": _REQ_TO_NEXT[1], "current_streak": 0,
-        "best_streak": 0, "correct_count": 0, "incorrect_count": 0,
+        "total_xp": 0,
+        "level": 1,
+        "xp_in_level": 0,
+        "xp_required_for_next_level": _REQ_TO_NEXT[1],
+        "current_streak": 0,
+        "best_streak": 0,
+        "correct_count": 0,
+        "incorrect_count": 0,
         "unlocks": _ladder_for_level(1),
     }
     assert await _row(db, user_id) is None
@@ -718,7 +698,17 @@ async def test_journey_from_registration_to_the_leaderboard(client, db, email_se
     # x2.5 from streak 11 on, and 280 XP total, which is nowhere near the D-2
     # boundaries. That is why the boundaries need their own legs (step 3).
     assert [b["xp_delta"] for b in bodies[:11]] == [
-        16, 16, 20, 20, 24, 24, 24, 32, 32, 32, 40,
+        16,
+        16,
+        20,
+        20,
+        24,
+        24,
+        24,
+        32,
+        32,
+        32,
+        40,
     ]
     assert [b["current_streak"] for b in bodies[:11]] == list(range(1, 12))
     assert (bodies[10]["best_streak"], bodies[10]["total_xp"]) == (11, 280)
@@ -731,7 +721,10 @@ async def test_journey_from_registration_to_the_leaderboard(client, db, email_se
     assert [b["level"] for b in crossings] == [2, 3, 4, 8, 13]
     assert [b["xp_in_level"] for b in crossings] == [20, 28, 0, 0, 0]
     assert [b["newly_unlocked"] for b in crossings] == [
-        list(_L2_UNICODE16), list(_L3_UNICODE24), list(_L4_SHELF), list(_L8_SHELF),
+        list(_L2_UNICODE16),
+        list(_L3_UNICODE24),
+        list(_L4_SHELF),
+        list(_L8_SHELF),
         list(_L13_SHELF),
     ]
 
@@ -743,7 +736,13 @@ async def test_journey_from_registration_to_the_leaderboard(client, db, email_se
         if b["level"] > a["level"] and not b["newly_unlocked"]
     ]
     assert quiet == [
-        (4, 5), (5, 6), (6, 7), (8, 9), (9, 10), (10, 11), (11, 12),
+        (4, 5),
+        (5, 6),
+        (6, 7),
+        (8, 9),
+        (9, 10),
+        (10, 11),
+        (11, 12),
     ]
 
     # Step 5: four penalties, all of them exactly -8 = §4.7's half of core 16, paid
@@ -773,8 +772,12 @@ async def test_journey_from_registration_to_the_leaderboard(client, db, email_se
     mine = [entry for entry in entries if entry["user_id"] == user_id]
     assert len(mine) == 1, [entry["username"] for entry in entries]
     assert mine[0] == {
-        "user_id": user_id, "username": username, "total_xp": 25752, "level": 13,
-        "correct_count": 47, "incorrect_count": 5,
+        "user_id": user_id,
+        "username": username,
+        "total_xp": 25752,
+        "level": 13,
+        "correct_count": 47,
+        "incorrect_count": 5,
     }
     for entry in entries:
         assert set(entry) == _BOARD_FIELDS  # no PII, no legacy `points` (US-34)
@@ -804,7 +807,9 @@ async def test_rate_limit_refusal_leaves_no_partial_state(client, db, email_serv
         body = response.json()
         _check_invariants(body, index)
         assert (
-            body["current_streak"], body["best_streak"], body["correct_count"],
+            body["current_streak"],
+            body["best_streak"],
+            body["correct_count"],
             body["incorrect_count"],
         ) == (index, index, index, 0)
     assert body == _RATE_LIMIT_120TH  # 4,640 XP -> L8, still inside the budget
@@ -846,8 +851,8 @@ async def test_locked_content_is_refused_naming_its_level(client, db, email_serv
     assert response.json() == {"detail": "Content locked until level 4."}
     assert response.json()["detail"].endswith("4.")  # the min_level of the 8-bit slot
 
-    assert await _row(db, user_id) is None      # nothing written behind the gate
-    assert await _attempts(db, user_id) == 1    # but the limiter counted it
+    assert await _row(db, user_id) is None  # nothing written behind the gate
+    assert await _attempts(db, user_id) == 1  # but the limiter counted it
     profile = (await client.get(_PROFILE_URL, headers=headers)).json()
     assert (profile["total_xp"], profile["level"]) == (0, 1)
     eight_bit = {"mode": "hex_to_bin", "bit_width": 8, "min_level": 4}
@@ -954,9 +959,14 @@ async def test_profile_and_me_agree_on_every_economy_field(client, db, email_ser
     assert profile_res.status_code == 200, profile_res.text
     assert me_res.status_code == 200, me_res.text
     zero = {
-        "total_xp": 0, "level": 1, "xp_in_level": 0,
-        "xp_required_for_next_level": 100, "current_streak": 0, "best_streak": 0,
-        "correct_count": 0, "incorrect_count": 0,
+        "total_xp": 0,
+        "level": 1,
+        "xp_in_level": 0,
+        "xp_required_for_next_level": 100,
+        "current_streak": 0,
+        "best_streak": 0,
+        "correct_count": 0,
+        "incorrect_count": 0,
     }
     assert profile_res.json() == {**zero, "unlocks": _ladder_for_level(1)}
     me = me_res.json()
@@ -999,8 +1009,13 @@ async def test_us33_golden_fixture_reproduces_byte_for_byte(client, db, email_se
     user_id, headers, _ = await _register_verify_login(client, email_service)
     db.add(
         UserGameProfile(
-            user_id=user_id, total_xp=1280, level=5, current_streak=2,
-            best_streak=7, correct_count=41, incorrect_count=5,
+            user_id=user_id,
+            total_xp=1280,
+            level=5,
+            current_streak=2,
+            best_streak=7,
+            correct_count=41,
+            incorrect_count=5,
         )
     )
     await db.commit()
@@ -1013,16 +1028,16 @@ async def test_us33_golden_fixture_reproduces_byte_for_byte(client, db, email_se
     assert response.status_code == 200, response.text
     golden = response.json()
     assert golden == {
-        "xp_delta": 40,                     # 32 core x 5/4 (XP-G04, streak 3)
-        "total_xp": 1320,                   # = cum(6)
-        "level": 6,                         # LV-05/LV-07: the boundary is inclusive
-        "xp_in_level": 0,                   # landed exactly on the threshold
+        "xp_delta": 40,  # 32 core x 5/4 (XP-G04, streak 3)
+        "total_xp": 1320,  # = cum(6)
+        "level": 6,  # LV-05/LV-07: the boundary is inclusive
+        "xp_in_level": 0,  # landed exactly on the threshold
         "xp_required_for_next_level": 760,  # req(6), the 6 -> 7 span
         "current_streak": 3,
         "best_streak": 7,
         "correct_count": 42,
         "incorrect_count": 5,
-        "newly_unlocked": [],               # a level-up with no unlock (R-9)
+        "newly_unlocked": [],  # a level-up with no unlock (R-9)
     }
     _check_invariants(golden, 47)  # 42 + 5 = the seeded history plus this answer
     await _reads_agree(client, headers, golden)
@@ -1030,6 +1045,85 @@ async def test_us33_golden_fixture_reproduces_byte_for_byte(client, db, email_se
     row = await _row(db, user_id)
     assert (row.total_xp, row.level, row.current_streak) == (1320, 6, 3)
     assert row.best_streak == 7  # the high-water mark is never lowered by a level-up
+
+
+# --------------------------------------------------------------------------- #
+# Gate #4: all 16 (mode, width) combos round-trip through /answer
+# --------------------------------------------------------------------------- #
+
+# The 8 missing combinations from the journey (Section A covers the other 8).
+# Each tuple: (mode, bit_width, expected_xp_delta, required_level)
+# Formula: BASE_XP[mode][bit_width] * MODE_MULTIPLIERS[mode]
+_MISSING_COMBOS: list[tuple[str, int, int, int]] = [
+    ("bin_to_dec", 32, 1024, 13),  # 256 base * 4 mult
+    ("hex_to_bin", 16, 64, 8),  # 64 base * 1 mult
+    ("hex_to_bin", 32, 128, 13),  # 128 base * 1 mult
+    ("hex_to_dec", 8, 96, 4),  # 48 base * 2 mult
+    ("hex_to_dec", 32, 384, 13),  # 192 base * 2 mult
+    ("unicode", 16, 32, 2),  # 32 base * 1 mult
+    ("unicode", 24, 64, 3),  # 64 base * 1 mult
+    ("unicode", 32, 128, 4),  # 128 base * 1 mult
+]
+
+
+@pytest.mark.parametrize("mode,bit_width,expected_xp_delta,required_level", _MISSING_COMBOS)
+async def test_missing_mode_width_combos_round_trip(
+    client: AsyncClient,
+    db: AsyncSession,
+    email_service: FakeEmailService,
+    mode: str,
+    bit_width: int,
+    expected_xp_delta: int,
+    required_level: int,
+) -> None:
+    """Gate #4: the 8 (mode, width) combos absent from the journey.
+
+    Each combo is tested with a fresh user set to the required level, so the
+    unlock gate passes and the XP delta is verified against the plan's base_xp
+    * mode_multiplier formula (no streak multiplier, streak=1).
+    """
+    user_id, headers, _ = await _register_verify_login(client, email_service)
+
+    # Set the profile to the required level with exactly cum(level) XP.
+    # cum values from _CUM: L2=100, L3=252, L4=476, L8=3220, L13=25752
+    cum_xp_for_level = {2: 100, 3: 252, 4: 476, 8: 3220, 13: 25752}
+    target_xp = cum_xp_for_level[required_level]
+    db.add(
+        UserGameProfile(
+            user_id=user_id,
+            total_xp=target_xp,
+            level=required_level,
+            current_streak=0,  # reset so streak multiplier = 1.0
+            best_streak=0,
+            correct_count=0,
+            incorrect_count=0,
+        )
+    )
+    await db.commit()
+
+    # Send the answer (correct, streak=1, no multiplier)
+    response = await client.post(
+        _ANSWER_URL,
+        json={"mode": mode, "bit_width": bit_width, "is_correct": True},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    # Verify XP delta matches the plan's formula (base_xp * mode_multiplier)
+    assert body["xp_delta"] == expected_xp_delta, (
+        f"{mode}/{bit_width}: expected {expected_xp_delta}, got {body['xp_delta']}"
+    )
+
+    # Verify total_xp increased by the delta
+    assert body["total_xp"] == target_xp + expected_xp_delta
+
+    # Verify streak is now 1 (post-increment, OQ-5)
+    assert body["current_streak"] == 1
+
+    # Verify D-8: all XP values are multiples of 4
+    assert body["xp_delta"] % 4 == 0
+    assert body["total_xp"] % 4 == 0
 
 
 # --------------------------------------------------------------------------- #
@@ -1056,9 +1150,9 @@ async def test_floor_at_cum_two_absorbs_the_whole_penalty(client, db, email_serv
 
     floor = bodies[-1]
     assert (floor["xp_delta"], floor["total_xp"], floor["level"]) == (0, 100, 2)
-    assert floor["current_streak"] == 0        # the streak resets even so
+    assert floor["current_streak"] == 0  # the streak resets even so
     assert floor["best_streak"] == 3
-    assert floor["total_xp"] == _CUM[2]        # the floor IS cum(level)
+    assert floor["total_xp"] == _CUM[2]  # the floor IS cum(level)
     row = await _row(db, user_id)
     assert (row.total_xp, row.level, row.incorrect_count) == (100, 2, 2)
 
@@ -1083,7 +1177,7 @@ async def test_level_up_to_six_unlocks_nothing(client, db, email_service):
     assert (bodies[-2]["level"], last["level"]) == (5, 6)
     assert (last["total_xp"], last["xp_in_level"]) == (1320, 0)
     assert last["newly_unlocked"] == []
-    assert _ladder_for_level(6) == _ladder_for_level(5)   # nothing new at L6
+    assert _ladder_for_level(6) == _ladder_for_level(5)  # nothing new at L6
     assert len(_ladder_for_level(6)) == 10  # 4 x L1 + 3 x 8-bit + 3 x unicode
     assert len(_ladder_for_level(13)) == 16  # §4.9 UN-02: the whole seed
     row = await _row(db, user_id)
