@@ -86,9 +86,10 @@ __all__ = [
 # the highest-volume one) puts the worst case at two lifetimes. The residual is
 # deliberate and tracked: the table still grows linearly with concurrent farmers,
 # the sweep is a seq scan (``ix_rate_limit_attempt_key_expires`` leads with ``key``
-# and cannot serve an unkeyed ``expires_at`` filter), and the cure is the index in
-# v005 — deferred past this sprint by D-6 ("no v005 mid-sprint"), same bucket as
-# the answer-history event table. A sweep scan is background work off every request
+# and cannot serve an unkeyed ``expires_at`` filter), and the cure is an index on
+# ``expires_at`` in a FUTURE migration — v005 is spoken for by US-34 (the legacy
+# ``DROP TABLE``, D-6 / Rev 3 R-1), so this belongs to v006, same bucket as the
+# answer-history event table. A sweep scan is background work off every request
 # path, which is exactly what Rev 3 R-2 bought by moving the DELETE out of them.
 RATE_LIMIT_SWEEP_INTERVAL_SECONDS: Final[int] = 60
 
@@ -307,7 +308,7 @@ class RateLimitService:
     async def _check(
         self, key: str, limit: int, window_seconds: int, *, purge_expired: bool
     ) -> bool:
-        """The shared count-and-record body behind both entry points.
+        """The shared count-and-record body behind both public check methods.
 
         ``purge_expired`` is the ONLY difference between the two public methods,
         and it is applied as the first statement, exactly where :meth:`check` has

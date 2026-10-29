@@ -1,9 +1,14 @@
 """Tests for the game endpoints.
 
-Two generations live side by side here on purpose (plan D-6): the legacy
-``/correct`` / ``/incorrect`` handlers over ``user_stats``, which US-34 deletes,
-and the Sprint-4 read side over ``user_game_profile`` — ``GET /api/game/profile``
-(US-35) and the rewritten ``GET /api/game/leaderboard`` (US-36).
+Three endpoints, all of them on ``user_game_profile``: the write path
+``POST /api/game/answer`` (US-32/US-33, pinned in ``tests/test_answer_endpoint.py``)
+and the read side — ``GET /api/game/profile`` (US-35) and the rewritten
+``GET /api/game/leaderboard`` (US-36).
+
+US-34 closed the D-6 co-existence window: the two Sprint-2 score writers and the
+table behind them are gone, so the first section of this file pins the ABSENCE
+instead of a behaviour — the removal is the contract the frontend's switch to
+``/answer`` depends on.
 
 Every expectation for the read side is a **plan literal** copied from
 ``docs/sprint4-plan.md`` (US-35, US-36, D-1, D-2), never derived from ``src/``,
@@ -26,7 +31,7 @@ from sqlalchemy.orm import sessionmaker
 from src.database.engine import Base, get_db
 from src.main import app
 from src.models.auth import User, UserIdentity
-from src.models.game import UserGameProfile, UserStats
+from src.models.game import UserGameProfile
 from src.services.leaderboard_service import leaderboard_entries
 from src.services.profile_service import load_snapshot, profile_response
 from src.utils.jwt_utils import create_access_token, create_refresh_token
@@ -179,51 +184,46 @@ async def auth_client(client):
     return client
 
 
-async def test_record_correct_answer(auth_client: AsyncClient):
-    """POST /api/game/correct should record correct answer and award bits as points."""
-    response = await auth_client.post("/api/game/correct", json={"bits": 8})
+# --------------------------------------------------------------------------- #
+# US-34: the legacy score endpoints are gone
+# --------------------------------------------------------------------------- #
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["message"] == "Correct answer recorded"
-    assert data["user_id"] == USER_ID
-    assert data["correct_count"] == 1
-    assert data["incorrect_count"] == 0
-    assert data["points"] == 8  # bits added directly as points
+# The two Sprint-2 writers were the only way to reach the legacy counters table, and
+# US-34 deletes both together with the table (migration v005). The frontend switched
+# to ``POST /api/game/answer`` in the same release train (plan §8), so what belongs
+# here now is the ABSENCE, pinned twice over: a 404 that SURVIVES an authenticated
+# request — a 401 would only prove the auth gate still runs, not that the route is
+# gone — and the route table itself, so a re-registration cannot slip back in
+# unnoticed.
 
+LEGACY_SCORE_PATHS: tuple[str, ...] = ("/api/game/correct", "/api/game/incorrect")
 
-async def test_record_incorrect_answer(auth_client: AsyncClient):
-    """POST /api/game/incorrect should increment incorrect count and deduct bits*4."""
-    response = await auth_client.post("/api/game/incorrect", json={"bits": 4})
-
-    assert response.status_code == 200
-    data = response.json()
-    assert data["message"] == "Incorrect answer recorded"
-    assert data["correct_count"] == 0
-    assert data["incorrect_count"] == 1
-    assert data["points"] == -16  # -(4 bits * 4)
+# The three endpoints US-34 leaves on this prefix, and the whole of its surface.
+GAME_ROUTES: frozenset[str] = frozenset(
+    {"/api/game/answer", "/api/game/profile", "/api/game/leaderboard"}
+)
 
 
-async def test_multiple_answers_accumulate(auth_client: AsyncClient):
-    """Multiple game actions should accumulate stats correctly."""
-    await auth_client.post("/api/game/correct", json={"bits": 4})  # +4
-    await auth_client.post("/api/game/correct", json={"bits": 8})  # +8
-    await auth_client.post("/api/game/incorrect", json={"bits": 4})  # -16
+@pytest.mark.parametrize("path", LEGACY_SCORE_PATHS)
+async def test_legacy_score_endpoints_answer_404_when_authenticated(
+    auth_client: AsyncClient, path: str
+):
+    """US-34: the legacy writers are not routes any more, for any caller."""
+    response = await auth_client.post(path, json={"bits": 8})
 
-    response = await auth_client.post("/api/game/correct", json={"bits": 12})  # +12
-    data = response.json()
-
-    assert data["correct_count"] == 3
-    assert data["incorrect_count"] == 1
-    assert data["points"] == 8  # 4 + 8 - 16 + 12 = 8
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": "Not Found"}
 
 
-@pytest.mark.parametrize("endpoint", ["/api/game/correct", "/api/game/incorrect"])
-async def test_game_action_without_token_returns_401(client: AsyncClient, endpoint):
-    """Game actions are protected and require a bearer token."""
-    response = await client.post(endpoint, json={"bits": 8})
+def test_the_game_router_registers_the_economy_endpoints_only():
+    """US-34: the route table IS the economy trio — nothing else answers here."""
+    registered = {
+        route.path
+        for route in app.routes
+        if str(getattr(route, "path", "")).startswith("/api/game")
+    }
 
-    assert response.status_code == 401
+    assert registered == GAME_ROUTES
 
 
 # --------------------------------------------------------------------------- #
@@ -621,19 +621,19 @@ async def test_leaderboard_rejects_an_out_of_range_limit(client: AsyncClient, li
     assert response.status_code == 422, response.text
 
 
-async def test_leaderboard_reads_the_profile_table_not_user_stats(
+async def test_leaderboard_ranks_only_players_who_have_answered(
     client: AsyncClient, seeded_db
 ):
-    """D-6 co-existence: a legacy ``user_stats`` row alone is NOT a leaderboard entry.
+    """US-36 / US-28 AC-3: a registered player with no profile row is NOT on the board.
 
-    The board reads ``user_game_profile``; the legacy table survives until US-34
-    but feeds nothing here.
+    The economy row is created lazily by the first ``POST /api/game/answer``, and the
+    board joins ``users`` through it (an ``INNER JOIN``, not a ``LEFT`` one), so
+    "has not played yet" is a rank of nothing rather than a zero-XP entry. US-34
+    removed the legacy counters table this used to be contrasted with; the rule
+    itself never came from that table, and it survives the removal unchanged.
     """
     _add_verified_user(
-        seeded_db, "user-legacy-only", "LegacyOnly", "legacy@example.com"
-    )
-    seeded_db.add(
-        UserStats(user_id="user-legacy-only", correct_count=99, points=999_999)
+        seeded_db, "user-legacy-only", "NeverAnswered", "legacy@example.com"
     )
     await seeded_db.commit()
 

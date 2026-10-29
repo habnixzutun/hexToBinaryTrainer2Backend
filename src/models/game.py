@@ -1,18 +1,18 @@
 """Game statistics models.
 
-Two generations of game state live here side by side on purpose
-(``docs/sprint4-plan.md`` D-6, Rev 3 R-1):
+One generation of game state lives here now:
 
-* :class:`UserStats` — the Sprint-2 legacy ``+bits / -4*bits`` row, table
-  ``user_stats``. **Kept until US-34**: ``src/routers/game.py`` and
-  ``src/routers/user.py`` still read and write it, and migration v004 (US-27) is
-  ADDITIVE ONLY — ``DROP TABLE user_stats`` belongs to v005, shipped with US-34
-  at sprint close. Deleting this class before then stops the app from booting
-  (``src/main.py`` imports the game router) and breaks pytest collection.
 * :class:`UserGameProfile` — the Sprint-4 XP-economy row, table
   ``user_game_profile`` (US-26). One row per user, lazily created by the first
   ``POST /api/game/answer`` (US-28 AC-3). Holds XP, level and streak state;
   the wire shapes live in :mod:`src.models.game_schemas`.
+
+The Sprint-2 legacy row (the ``+bits / -4*bits`` counters) was deleted together
+with its table by **US-34**: migration v005 drops the table, and no reader or
+writer of it survived the XP-economy endpoints (``/answer``, ``/profile``,
+``/leaderboard``, ``/api/user/me``). The plan froze that ordering — D-6 / Rev 3
+R-1 splits the schema change into v004 (additive) and v005 (destructive), and
+US-34 is the only story allowed to delete the class.
 """
 
 from datetime import UTC, datetime
@@ -32,28 +32,13 @@ from sqlalchemy.orm import relationship
 from src.database.engine import Base
 
 
-class UserStats(Base):
-    """User game statistics (legacy — survives until US-34, see module docstring)."""
-
-    __tablename__ = "user_stats"
-
-    user_id = Column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
-    )
-    correct_count = Column(Integer, default=0, nullable=False)
-    incorrect_count = Column(Integer, default=0, nullable=False)
-    points = Column(Integer, default=0, nullable=False)
-
-    user = relationship("User")
-
-
 class UserGameProfile(Base):
     """Sprint-4 XP economy profile (US-26, plan D-1..D-8).
 
     ``user_id`` is both primary key and FK to ``users.id`` with
     ``ON DELETE CASCADE`` — one economy row per user, removed with the user and
-    never created eagerly (the legacy lazy pattern at ``src/routers/game.py:72-79``
-    is mirrored by ``src/services/game_service.py`` for US-28 AC-3).
+    never created eagerly: the row appears at the first answer that needs it
+    (``src/services/game_service.py``, US-28 AC-3), not at registration.
 
     Column semantics:
 

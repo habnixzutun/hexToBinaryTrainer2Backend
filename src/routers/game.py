@@ -1,9 +1,7 @@
-"""Game router: score tracking, the economy read side, and the leaderboard.
+"""Game router: the economy write path, the read side, and the leaderboard.
 
-Three generations of handler live here on purpose (plan D-6):
+Three endpoints, all of them on ``user_game_profile``:
 
-* **Legacy writers** ``/correct`` and ``/incorrect`` — still on ``user_stats``,
-  still ``# pragma: no cover``, deleted by US-34.
 * **The Sprint-4 write path** ``POST /api/game/answer`` (US-33), which holds
   nothing but the **gate order** and its HTTP mappings::
 
@@ -15,6 +13,11 @@ Three generations of handler live here on purpose (plan D-6):
   rewritten onto ``user_game_profile`` by US-36 while keeping its path, its
   public visibility (Rev 3 R-3/OQ-9) and its ``{entries: [...]}`` wrapper.
 
+The Sprint-2 writers ``/correct`` and ``/incorrect`` are gone: **US-34** deleted
+both handlers and, with migration v005, the table behind them. The plan froze that
+ordering in D-6 / Rev 3 R-1 — the two-migration split exists precisely so the
+legacy writers could keep serving until every reader had moved.
+
 Every number in every response comes from a service module
 (:mod:`src.services.answer_service`, :mod:`src.services.game_service`,
 :mod:`src.services.profile_service`, :mod:`src.services.leaderboard_service`),
@@ -23,13 +26,9 @@ test can reach without HTTP.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.engine import AsyncSessionLocal, get_db
-from src.models.auth import User
-from src.models.game import UserStats
 from src.models.game_schemas import (
     AnswerRequest,
     AnswerResponse,
@@ -61,123 +60,11 @@ from src.services.rate_limit_service import RateLimitService
 router = APIRouter(prefix="/api/game", tags=["game"])
 
 
-class GameActionRequest(BaseModel):
-    """Request body for correct/incorrect answer submission."""
-
-    bits: int
-
-
-class GameSubmitResponse(BaseModel):
-    """Response after recording a game action."""
-
-    message: str
-    user_id: str
-    correct_count: int
-    incorrect_count: int
-    points: int
-
-
-# US-36 replaced the legacy ``LeaderboardEntry`` / ``LeaderboardResponse`` pair
-# with US-26's frozen ``LeaderboardEntryV2`` / ``LeaderboardResponseV2``: the entry
-# drops ``points`` outright rather than aliasing it (Rev 3 — an alias would have to
-# be removed again in US-34), and both wire shapes live in the schema module next to
-# the answer and profile contracts instead of here.
-
-
-@router.post(
-    "/correct", status_code=status.HTTP_200_OK, response_model=GameSubmitResponse
-)
-async def record_correct_answer(  # pragma: no cover — legacy, gone in US-34 (D-6)
-    request: Request,
-    body: GameActionRequest,
-    session: AsyncSession = Depends(get_db),
-) -> GameSubmitResponse:
-    """Record a correct answer and update user stats."""
-    user_id = _extract_bearer_user_id(request)
-
-    result = await session.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found.",
-        )
-
-    stats_result = await session.execute(
-        select(UserStats).where(UserStats.user_id == user_id)
-    )
-    stats = stats_result.scalar_one_or_none()
-
-    if stats is None:
-        stats = UserStats(
-            user_id=user_id,
-            correct_count=1,
-            incorrect_count=0,
-            points=body.bits,
-        )
-        session.add(stats)
-    else:
-        stats.correct_count += 1
-        stats.points += body.bits
-
-    await session.commit()
-    await session.refresh(stats)
-
-    return GameSubmitResponse(
-        message="Correct answer recorded",
-        user_id=user_id,
-        correct_count=stats.correct_count,
-        incorrect_count=stats.incorrect_count,
-        points=stats.points,
-    )
-
-
-@router.post(
-    "/incorrect", status_code=status.HTTP_200_OK, response_model=GameSubmitResponse
-)
-async def record_incorrect_answer(  # pragma: no cover — legacy, gone in US-34 (D-6)
-    request: Request,
-    body: GameActionRequest,
-    session: AsyncSession = Depends(get_db),
-) -> GameSubmitResponse:
-    """Record an incorrect answer and update user stats."""
-    user_id = _extract_bearer_user_id(request)
-
-    result = await session.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found.",
-        )
-
-    stats_result = await session.execute(
-        select(UserStats).where(UserStats.user_id == user_id)
-    )
-    stats = stats_result.scalar_one_or_none()
-
-    if stats is None:
-        stats = UserStats(
-            user_id=user_id,
-            correct_count=0,
-            incorrect_count=1,
-            points=-(body.bits * 4),
-        )
-        session.add(stats)
-    else:
-        stats.incorrect_count += 1
-        stats.points -= body.bits * 4
-
-    await session.commit()
-    await session.refresh(stats)
-
-    return GameSubmitResponse(
-        message="Incorrect answer recorded",
-        user_id=user_id,
-        correct_count=stats.correct_count,
-        incorrect_count=stats.incorrect_count,
-        points=stats.points,
-    )
+# US-36 replaced the legacy ``LeaderboardEntry`` / ``LeaderboardResponse`` pair with
+# US-26's frozen ``LeaderboardEntryV2`` / ``LeaderboardResponseV2`` — the entry drops
+# the old score field outright rather than aliasing it — and every wire shape this
+# router answers with lives in the schema module next to the answer and profile
+# contracts, not here.
 
 
 # --------------------------------------------------------------------------- #
@@ -397,10 +284,10 @@ async def get_leaderboard(
 
     The path, the ``{entries: [...]}`` wrapper and the public visibility are all
     unchanged from the Sprint-2 board; what changed underneath is the source
-    (``user_game_profile``, not ``user_stats.points``), the total order
+    (``user_game_profile``, not the legacy counters table), the total order
     (``total_xp DESC``, ``incorrect_count ASC``, ``user_id ASC``) and the entry
-    fields (``points`` is gone outright, no deprecated alias — an alias would have to
-    be removed again in US-34).
+    fields — the legacy score field is gone outright, with no deprecated alias,
+    because an alias would only have been removed again by US-34.
 
     Raises:
         HTTPException: 422 (``limit`` outside 1..100, or not an integer).

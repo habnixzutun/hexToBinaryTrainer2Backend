@@ -79,13 +79,12 @@ omit = [
     "src/init_db.py",  # Setup script, not testable
     # US-32/33 F1: src/routers/game.py LEFT the omit list, because it holds
     # submit_answer — security-critical (auth -> validate -> rate-limit -> unlock gate
-    # -> transact) — and an omitted file measures no part of it. The three legacy
-    # handlers still living there are excluded per-handler by '# pragma: no cover'
-    # instead; they are deleted in US-34, and the pragmas go with them.
-    # US-28: src/services/game_service.py and src/migrations/v002_add_user_stats.py
-    # left the omit list — the service is now under test, and the v002 entry named
-    # a file that does not exist (the real one is v002_game_stats.py, already
-    # measured). US-27/US-28.
+    # -> transact) — and an omitted file measures no part of it. While the legacy
+    # Sprint-2 writers still lived there they were excluded per-handler by
+    # '# pragma: no cover'; US-34 deleted both handlers along with their pragmas, so
+    # the file is now measured whole (100%).
+    # US-28: src/services/game_service.py left the omit list — it is under test.
+    # US-27/US-28/US-34.
     "src/schemas/*",  # Not part of Sprint 2
     "src/services/email_service.py",  # SMTP sending requires external server
     "*/tests/*",

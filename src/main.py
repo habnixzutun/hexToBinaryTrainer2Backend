@@ -18,6 +18,7 @@ from src.migrations.v001_auth_schema import run_migration as run_v001
 from src.migrations.v002_game_stats import run_migration as run_v002
 from src.migrations.v003_rate_limit import run_migration as run_v003
 from src.migrations.v004_xp_schema import run_migration as run_v004
+from src.migrations.v005_drop_user_stats import run_migration as run_v005
 from src.models.auth import UserIdentity
 from src.routers.auth import router as auth_router
 from src.routers.game import router as game_router
@@ -55,8 +56,8 @@ async def lifespan(app: FastAPI):
     with ``{"status": "error", "database": "disconnected", "error": str(e)}`` on a
     failed probe. Both halves of that — the status code and the leak of a driver
     message to an unauthenticated caller (CWE-200) — belong to US-18's contract and
-    to the ops dashboard that reads it, so changing them is not a review fix. Tracked
-    as follow-up alongside US-34's cleanup of the legacy game routes.
+    to the ops dashboard that reads it, so changing them is not a review fix. Still
+    open as follow-up now that US-34 has closed the legacy game routes.
     """
     try:
         async with AsyncSessionLocal() as session:
@@ -68,9 +69,14 @@ async def lifespan(app: FastAPI):
             await run_v002(session)
             await run_v003(session)
             # US-27 (D-6 / Rev 3 R-1): ADDITIVE only — creates user_game_profile and
-            # leaves user_stats in place. The DROP belongs to v005, shipped with
-            # US-34 at sprint close.
+            # leaves the legacy Sprint-2 table in place, so the co-existence window
+            # stays green on every commit.
             await run_v004(session)
+            # US-34, sprint close: the destructive half of that split. Drops the
+            # legacy table now that /answer (US-32/33) is the only writer and
+            # /profile, /leaderboard and /me (US-35/36/37) are the only readers.
+            # Idempotent, and a no-op on a database that never ran v002.
+            await run_v005(session)
     except Exception:
         # exc_info, not str(e): the exception TYPE is the diagnostic here (a lost
         # connection, a permission denial and a half-applied migration all look the

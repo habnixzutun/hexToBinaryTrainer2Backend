@@ -37,12 +37,23 @@ Defense-in-depth layered on top of the authentication system. Details in [Securi
 - **Rate Limiting** on authentication endpoints — persistent (DB-backed) since
   Sprint 3
 
-### Core Features (Sprint 1)
-- **Answer Tracking**: Track correct/incorrect answers with point calculations
-  - Correct answer: +bits points
-  - Incorrect answer: -4×bits points
-- **Leaderboard**: Top N users sorted by points (DESC), `limit` query parameter
-  defaults to 50 (no secondary sort — tied scores keep an arbitrary order)
+### Game Economy (Sprint 4)
+- **XP Economy**: one `POST /api/game/answer` records an answer and returns the full
+  economy state — signed `xp_delta`, `total_xp`, derived `level`, streak counters and
+  the `newly_unlocked` delta (see [Game Endpoints](#game-endpoints))
+- **Level Curve + Content Unlocks**: level is derived from `total_xp`; each
+  `(mode, bit_width)` pair is playable from a minimum level, enforced server-side
+  with `403` and the required level in the message
+- **Leaderboard**: Top N users sorted by `total_xp` (DESC), tiebroken by fewer
+  mistakes then `user_id` — public, no authentication. `limit` defaults to 50 and is
+  bounded 1–100
+- **Rate Limited**: 120 answers per user per 60 s window, `429` with `Retry-After`
+
+The Sprint 1 `+bits` / `-4×bits` scoring endpoints were **removed in US-34** (Sprint 4
+close): `POST /api/game/correct` and `POST /api/game/incorrect` and the table behind
+them are gone, with no deprecated alias. The schema change shipped as two migrations —
+`v004` (additive, creates `user_game_profile`) and `v005` (drops the legacy table) —
+and no data was backfilled (the database was empty).
 
 ## Tech Stack
 
@@ -478,8 +489,11 @@ used.` or `400 Invalid reset token.` (also for a token of the wrong type), plus
 
 **GET /api/user/me**
 
-Profile plus game statistics of the authenticated user. Statistics are `0` until
-the first answer is submitted (the `user_stats` row is created lazily).
+Profile plus the Sprint-4 economy state of the authenticated user — the same nine
+fields `GET /api/game/profile` reports for the numbers, read from the same
+`user_game_profile` row. The counters are `0`/`level` 1 until the first answer is
+submitted (that row is created lazily by `POST /api/game/answer`; this read never
+inserts).
 
 **Headers:** `Authorization: Bearer <access_token>`
 
@@ -489,15 +503,19 @@ the first answer is submitted (the `user_stats` row is created lazily).
   "id": "01234567-89ab-cdef-0123-456789abcdef",
   "username": "username",
   "email": "user@example.com",
-  "correct_count": 13,
-  "incorrect_count": 1,
-  "points": 36
+  "correct_count": 42,
+  "incorrect_count": 5,
+  "total_xp": 1320,
+  "level": 6,
+  "current_streak": 3,
+  "best_streak": 7
 }
 ```
 
-(Example above: 13 correct answers at `bits=4` → +52, one incorrect → −16 = 36 points.)
+(The legacy `points` field is gone outright — no deprecated alias, removed with its
+two endpoints in US-34.)
 
-**Errors:** `401` for a missing/invalid/expired token, `401 User not found.` if
+**Errors:** `401` for a missing/invalid/expired token, `404 User not found.` if
 the token no longer belongs to an existing user.
 
 ---
@@ -646,49 +664,112 @@ strength requirements.`, `400 New password must be different from old password.`
 
 ### Game Endpoints
 
-**POST /api/game/correct** · **POST /api/game/incorrect**
+**POST /api/game/answer**
 
-Record an answer and return the updated score (requires authentication).
+Record one answer and return the caller's full economy state (requires
+authentication). This is the only write path of the economy since US-34 removed the
+Sprint-1 pair `POST /api/game/correct` / `POST /api/game/incorrect`.
 
 **Headers:** `Authorization: Bearer <access_token>`
 
 **Request:**
 ```json
 {
-  "bits": 4
+  "mode": "hex_to_bin",
+  "bit_width": 8,
+  "is_correct": true
 }
 ```
+
+`mode` ∈ `hex_to_bin` · `hex_to_dec` · `bin_to_dec` · `unicode`. `bit_width` is
+**bits in every mode** (OQ-7): 4/8/16/32 for the three conversion modes, 8/16/24/32
+for `unicode` (= 1–4 bytes). Anything else is a `422`, as is any extra field —
+`extra="forbid"`, so a client-computed `total_xp` or a body `user_id` cannot be
+smuggled in. The request body is capped at 4 KiB (`413`).
 
 **Response:** `200 OK`
 ```json
 {
-  "message": "Correct answer recorded",
-  "user_id": "01234567-89ab-cdef-0123-456789abcdef",
-  "correct_count": 13,
-  "incorrect_count": 1,
-  "points": 36
+  "xp_delta": 40,
+  "total_xp": 1320,
+  "level": 6,
+  "xp_in_level": 0,
+  "xp_required_for_next_level": 760,
+  "current_streak": 3,
+  "best_streak": 7,
+  "correct_count": 42,
+  "incorrect_count": 5,
+  "newly_unlocked": []
 }
 ```
 
-Scoring: a correct answer adds `bits`, an incorrect one subtracts `4 × bits`
-(message `"Incorrect answer recorded"`, points may go negative). The
-`user_stats` row is created on the first submission.
+`xp_delta` is the **signed, post-clamp** change: positive on a correct answer,
+negative on a penalty, and `0` when the level floor blocks the penalty (so a client
+must not assume a nonzero delta on `is_correct: false`). `level` is derived from
+`total_xp`, `xp_in_level` = `total_xp − cum(level)`, and
+`xp_required_for_next_level` is the **span** to the next level, not a cumulative
+threshold. `newly_unlocked` is the delta set of this answer (usually empty, including
+on a level-up with no unlock row — the same `{mode, bit_width, min_level}` element
+shape as `/profile`'s `unlocks`). XP is a multiple of 4 throughout.
 
-**Errors:** `401` for a missing/invalid access token, `404 User not found.` if the
-token's user no longer exists.
+The caller's profile row is created lazily by the first answer; concurrent answers
+from one user serialize on a row lock, and one request is one transaction.
 
-> ⚠️ `bits` is currently **not** range-validated (`GameActionRequest` has no
-> `gt=0`/`le=` constraint), so a client can submit `0`, huge or negative values to
-> move its own score. Adding the boundary check is the open item from the
-> Sprint-1 backlog (`docs/backlog.md` US-03).
+**Errors:** `401` no/invalid/expired token (checked before any SQL), `422` invalid
+payload, `429` over the rate budget (120 answers / 60 s, with `Retry-After`),
+`403` the combo is not unlocked at the caller's **pre-answer** level, `404 User
+not found.` if the token's user no longer exists.
+
+---
+
+**GET /api/game/profile**
+
+The caller's economy state without answering — the same numbers as `/answer`, plus
+the **full** unlock ladder for their level (so the client never hardcodes the seed).
+Requires authentication; a missing profile row answers the zero state (level 1, 0 XP,
+the level-1 ladder) and inserts nothing.
+
+**Headers:** `Authorization: Bearer <access_token>`
+
+Example — the zero state of a player who has not answered yet (level 1 at 0 XP, so
+`xp_required_for_next_level` is the full span 1 → 2 and `unlocks` is the four-entry
+level-1 ladder, grouped by mode):
+```json
+{
+  "total_xp": 0,
+  "level": 1,
+  "xp_in_level": 0,
+  "xp_required_for_next_level": 100,
+  "current_streak": 0,
+  "best_streak": 0,
+  "correct_count": 0,
+  "incorrect_count": 0,
+  "unlocks": [
+    { "mode": "hex_to_bin", "bit_width": 4, "min_level": 1 },
+    { "mode": "hex_to_dec", "bit_width": 4, "min_level": 1 },
+    { "mode": "bin_to_dec", "bit_width": 4, "min_level": 1 },
+    { "mode": "unicode", "bit_width": 8, "min_level": 1 }
+  ]
+}
+```
+
+**Errors:** `401`, `404 User not found.`
 
 ---
 
 **GET /api/game/leaderboard**
 
-Top N players by points (DESC). Public — no authentication required.
+Top N players by `total_xp` (DESC). Public — no authentication required (the entry
+shape carries `username` plus game numbers only, no email and no PII, which is what
+keeps it public; the bounded `limit` is the abuse control).
 
-**Query Parameter:** `limit` (default `50`)
+**Query Parameter:** `limit` (default `50`, allowed 1–100 — outside that range is a
+`422`)
+
+Ordering is `total_xp DESC`, then `incorrect_count ASC`, then `user_id ASC` — a total
+order, so a client polling the board never sees tied rows reshuffle between two
+requests. Players without a profile row are absent ("has not played yet" is not a
+rank). No `points` field, and no deprecated alias for it.
 
 **Response:** `200 OK`
 ```json
@@ -697,9 +778,10 @@ Top N players by points (DESC). Public — no authentication required.
     {
       "user_id": "01234567-89ab-cdef-0123-456789abcdef",
       "username": "username",
-      "correct_count": 13,
-      "incorrect_count": 1,
-      "points": 36
+      "total_xp": 1320,
+      "level": 6,
+      "correct_count": 42,
+      "incorrect_count": 5
     }
   ]
 }
@@ -997,12 +1079,21 @@ uv run pytest -v
   validation, delivery rate limit (US-09)
 
 **Infrastructure**
-- `tests/test_migrations.py`: Schema migrations vs. PostgreSQL (US-09, US-22, v003)
+- `tests/test_migrations.py`: Schema migrations vs. PostgreSQL (US-09, US-22, v003,
+  v004, v005)
 - `tests/test_smtp_integration.py`: SMTP settings + startup wiring (US-20)
 - `tests/test_email_service_ssl.py`: STARTTLS / implicit-TLS handling
 - `tests/test_init_db.py`, `tests/test_smoke.py`, `tests/test_deployment.py`:
   Startup script, app boot, Docker/CI contracts
-- `tests/test_game.py`: Game/stats endpoints
+- `tests/test_game.py`: The economy route table — `/answer`, `/profile`,
+  `/leaderboard`, and the 404 the removed legacy writers now return (US-34)
+- `tests/test_answer_endpoint.py`, `tests/test_input_validation.py`: the
+  authenticate → validate → rate-limit → unlock-gate → transact order (US-32/US-33)
+- `tests/test_game_profile_models.py`, `tests/test_game_config.py`,
+  `tests/test_xp_engine.py`, `tests/test_level_service.py`,
+  `tests/test_unlock_service.py`, `tests/test_game_service.py`: the Sprint-4 economy
+  units (US-25 … US-28); the two read sides US-35/US-36 are pinned in
+  `tests/test_game.py` and `tests/test_user_me.py` against shared fixtures
 - `tests/test_architecture_docs.py`: Guards the docs themselves
 
 ### Coverage Requirements
@@ -1035,10 +1126,12 @@ like 75 % when existing tests already exercised ~98 % of it).
   `services/email_service.py` (needs a real SMTP server)
 - `routers/game.py` left that omit list with US-32/33: it holds `submit_answer`,
   which is security-critical (auth → validate → rate-limit → unlock gate → transact)
-  and an omitted file measures nothing. The three legacy handlers still in it
-  (`/correct`, `/incorrect`, `/leaderboard`) are excluded per handler by
-  `# pragma: no cover` and are deleted in US-34. Test counts above are the
-  Sprint-3 snapshot; US-32/33 add the answer-endpoint suites.
+  and an omitted file measures nothing. The two legacy Sprint-1 handlers that lived
+  beside it were excluded per handler by `# pragma: no cover` until US-34 deleted
+  them, so the file is measured whole now (**100 %**). Test counts above are the
+  Sprint-3 snapshot; Sprint 4 adds the answer-endpoint, profile, leaderboard and
+  economy-unit suites — **1983 tests, 95.35 % total** measured 2026-10-29 on this
+  branch (`uv run pytest`).
 
 ## Docker
 

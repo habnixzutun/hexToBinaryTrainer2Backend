@@ -236,9 +236,10 @@ async def test_startup_lifespan_installs_email_service(monkeypatch):
     monkeypatch.setattr(main_module, "run_v001", _noop)
     monkeypatch.setattr(main_module, "run_v002", _noop)
     monkeypatch.setattr(main_module, "run_v003", _noop)
-    # US-27 added v004 to the lifespan; this DB-free test has to keep every
-    # migration stubbed, or the real run_v004 hits _FakeSession.
+    # US-27 added v004 and US-34 added v005 to the lifespan; this DB-free test has to
+    # keep every migration stubbed, or the real run_v00N hits _FakeSession.
     monkeypatch.setattr(main_module, "run_v004", _noop)
+    monkeypatch.setattr(main_module, "run_v005", _noop)
 
     async with main_module.lifespan(main_module.app):
         pass

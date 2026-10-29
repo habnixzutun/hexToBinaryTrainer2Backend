@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -34,12 +35,12 @@ from datetime import UTC, datetime, timedelta
 import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event, select, text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from src.database.engine import get_db
 from src.middleware.body_size import ANSWER_BODY_LIMIT_BYTES, ANSWER_BODY_SIZE_PATH
 from src.models.auth import User
-from src.models.game import UserGameProfile, UserStats
+from src.models.game import UserGameProfile
 from src.routers.game import answer_rate_limit_session
 from src.services.answer_service import rate_limit_key
 from src.services.game_config import (
@@ -484,21 +485,49 @@ async def test_first_ever_answer_creates_the_row_lazily(client, db, async_engine
     assert (row.total_xp, row.level) == (48, 1)  # still L1: cum(2) = 100
 
 
-async def test_endpoint_writes_nothing_to_the_legacy_table(client, db, async_engine):
-    """D-6: /answer lives in user_game_profile; user_stats stays untouched (US-34)."""
+#: The one table the answer path is allowed to write besides the economy row: the
+#: limiter's own bookkeeping, which R-2 puts on its own session and its own table.
+#: Named here (not derived from ``src/``) so the exemption cannot quietly widen.
+WRITE_EXEMPT_TABLES: tuple[str, ...] = ("rate_limit_attempt",)
+
+
+async def test_every_write_of_the_answer_path_targets_the_economy_table(
+    client, db, async_engine
+):
+    """D-6's endpoint half, restated for the post-US-34 schema: one write target.
+
+    The co-existence this used to assert (``/answer`` leaves the legacy table alone)
+    is structural now — US-34 deleted that table and its model, so the only way this
+    claim can ever fail again is a writer that acquires a SECOND target. The
+    statement stream is what catches that: every INSERT or UPDATE the answer path
+    emits, the limiter's bookkeeping aside, lands on ``user_game_profile``. Reads
+    (``users`` for the identity check) are deliberately unconstrained — this is a
+    write-side invariant, and it is pinned on the SQL Postgres receives rather than
+    on the ORM calls the handler happens to make.
+
+    ``bit_width=4`` because the unlock gate (D-2) runs first: this user has no XP, so
+    anything wider would be a 403 and the stream would prove nothing.
+    """
     user_id = await _seed_user(db)
 
-    for is_correct in (True, False):
-        await client.post(
-            ANSWER_URL,
-            json={"mode": "hex_to_bin", "bit_width": 8, "is_correct": is_correct},
-            headers=_headers(user_id),
-        )
+    with _statement_log(async_engine) as log:
+        for is_correct in (True, False):
+            response = await client.post(
+                ANSWER_URL,
+                json={"mode": "hex_to_bin", "bit_width": 4, "is_correct": is_correct},
+                headers=_headers(user_id),
+            )
+            assert response.status_code == 200, response.text
 
-    legacy = (
-        await db.execute(select(UserStats).where(UserStats.user_id == user_id))
-    ).scalar_one_or_none()
-    assert legacy is None
+    writes = [
+        entry
+        for entry in log
+        if re.match(r"^(INSERT|UPDATE)\b", entry, flags=re.IGNORECASE)
+        and not any(needle in entry.lower() for needle in WRITE_EXEMPT_TABLES)
+    ]
+    assert writes, log  # two answers must have written something
+    for entry in writes:
+        assert "user_game_profile" in entry.lower(), entry
 
 
 # --------------------------------------------------------------------------- #
@@ -1569,8 +1598,22 @@ async def test_the_optional_asgi_message_keys_may_be_absent(
 # --------------------------------------------------------------------------- #
 
 
-def test_the_answer_route_is_the_only_addition_to_the_game_router():
-    """US-33 adds exactly one route; the legacy trio is still there (D-6, US-34).
+GAME_ROUTE_INVENTORY: frozenset[tuple[str, tuple[str, ...]]] = frozenset(
+    {
+        ("/api/game/answer", ("POST",)),
+        ("/api/game/profile", ("GET",)),
+        ("/api/game/leaderboard", ("GET",)),
+    }
+)
+
+
+def test_the_economy_trio_is_the_whole_game_router():
+    """US-33/US-34: /answer is mounted, and nothing else answers on /api/game.
+
+    US-33 added the write path beside the two readers US-35/US-36 shipped; US-34 took
+    the legacy writers out. The inventory is therefore an EQUALITY, not a subset
+    claim — a fourth route here would be a legacy resurrection or an unaccounted
+    endpoint, and both fail the same grep.
 
     The path literal is asserted against the middleware's own constant too: a drift
     between the two would leave the endpoint silently uncapped, and both are module
@@ -1585,12 +1628,7 @@ def test_the_answer_route_is_the_only_addition_to_the_game_router():
         for route in app.routes
         if getattr(route, "path", "").startswith("/api/game")
     }
-    assert ("/api/game/answer", ("POST",)) in paths
-    assert {
-        ("/api/game/correct", ("POST",)),
-        ("/api/game/incorrect", ("POST",)),
-        ("/api/game/leaderboard", ("GET",)),
-    } <= paths
+    assert paths == GAME_ROUTE_INVENTORY, paths
     # The drift guard: the router's own path plus its prefix IS the middleware's
     # protected path, so the cap cannot be pointed at a route that no longer exists.
     assert f"{game_router.prefix}{ANSWER_PATH}" == ANSWER_BODY_SIZE_PATH

@@ -2,11 +2,12 @@
 
 Two halves:
 
-* the **model trio** — ``UserGameProfile`` (new, table ``user_game_profile``) and
-  the legacy ``UserStats`` (kept, plan D-6 / Rev 3 R-1: v004 is ADDITIVE, only
-  US-34 may delete ``UserStats``), verified against a real PostgreSQL 16 catalog:
-  columns, defaults, CHECK names, the ``total_xp DESC`` index, cascade delete and
-  side-by-side coexistence of the two tables (US-26 AC-2/AC-3);
+* the **model** — ``UserGameProfile`` (table ``user_game_profile``), verified
+  against a real PostgreSQL 16 catalog: columns, defaults, CHECK names, the
+  ``total_xp DESC`` index and cascade delete (US-26 AC-1/AC-2/AC-4). The legacy
+  Sprint-2 model that used to be pinned here as the D-6 co-existence half is
+  asserted GONE instead: US-34 deleted the class and v005 dropped its table, so
+  the ORM now contributes exactly one game table (US-34 AC-1/AC-2);
 * the **schema quartet** in ``src/models/game_schemas.py`` — ``AnswerRequest``
   (per-mode ``bit_width`` validation in BITS for every mode, OQ-7), and the
   response contracts frozen by US-33/US-35/US-36 (``AnswerResponse``,
@@ -17,10 +18,10 @@ D-6/D-7, OQ-7/OQ-8, US-33 golden fixture, R-9 unlock shape) and deliberately not
 derived from ``src/``, so a wrong constant cannot hide behind a wrong expectation
 — same rule as ``tests/test_game_config.py``.
 
-The 422 behaviour is probed through a throwaway FastAPI app (never
-``src/routers/game.py``, which stays untouched until US-34): the per-mode width
-rule must surface as an HTTP 422 exactly once US-33 mounts ``AnswerRequest`` on
-``POST /api/game/answer``.
+The 422 behaviour is probed through a throwaway FastAPI app rather than
+``src/routers/game.py``, so a schema test never depends on the router's auth,
+rate-limit and unlock gates: the per-mode width rule has to surface as an HTTP 422
+on its own merit (US-33 mounts ``AnswerRequest`` on ``POST /api/game/answer``).
 """
 
 from __future__ import annotations
@@ -31,9 +32,10 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
-from src.models import UserStats as UserStatsFromPackage
+from src.migrations.v005_drop_user_stats import LEGACY_TABLE
+from src.models import game as game_models
 from src.models.auth import User
-from src.models.game import UserGameProfile, UserStats
+from src.models.game import UserGameProfile
 from src.models.game_schemas import (
     AnswerRequest,
     AnswerResponse,
@@ -188,32 +190,72 @@ async def _seed_user(session, user_id: str) -> User:
 
 
 # --------------------------------------------------------------------------- #
-# A. ORM: shape, coexistence, D-6 survival (US-26 AC-2 / AC-3)
+# A. ORM: shape, and the US-34 removal (US-26 AC-1/AC-2, US-34 AC-2)
 # --------------------------------------------------------------------------- #
 
-
-def test_user_stats_survives_us26():
-    """AC-2: UserStats is NOT removed here — D-6/R-1 reserves that for US-34.
-
-    ``src/routers/game.py`` and ``src/routers/user.py`` still import it, and
-    ``main.py`` imports the game router, so a deleted class would stop the app
-    from booting (sprint gate #1).
-    """
-    assert UserStats.__tablename__ == "user_stats"
-    assert {"user_id", "correct_count", "incorrect_count", "points"} <= {
-        col.name for col in UserStats.__table__.columns
+# The whole app schema, as the ORM declares it: six auth tables (US-09) plus the one
+# economy table (US-26). Listed explicitly so that BOTH directions of drift go red —
+# a table that appears (US-34's legacy class re-added, which migration v005 drops, so
+# ``create_all`` would then build a table production does not have) and a table that
+# disappears silently. This is the pin the D-6 co-existence used to need two halves
+# for: US-26/US-27 kept the legacy model on purpose, US-34 is the only story allowed
+# to delete it, and after that deletion this set is its exact size.
+EXPECTED_TABLES: frozenset[str] = frozenset(
+    {
+        "users",
+        "user_identities",
+        "user_refresh_tokens",
+        "password_reset_tokens",
+        "user_audit_log",
+        "rate_limit_attempt",
+        "user_game_profile",
     }
-    # still exported from the package (tests/test_user_me.py imports it)
-    assert UserStatsFromPackage is UserStats
+)
+
+EXPECTED_EXPORTED_MODELS: frozenset[str] = frozenset(
+    {
+        "User",
+        "UserIdentity",
+        "UserRefreshToken",
+        "PasswordResetToken",
+        "UserAuditLog",
+        "RateLimitAttempt",
+        "UserGameProfile",
+    }
+)
+
+
+def _tables_the_game_module_declares() -> set[str]:
+    """Every ``__tablename__`` exposed as a class by :mod:`src.models.game`.
+
+    Read out of the module namespace instead of named in the test, so the assertion
+    goes red on exactly the drift it guards: a re-added legacy model (US-34 deleted
+    the class and v005 dropped its table, so ``Base.metadata.create_all`` would then
+    rebuild a schema production no longer has) or a renamed economy model.
+    """
+    return {
+        value.__tablename__
+        for value in vars(game_models).values()
+        if isinstance(value, type) and hasattr(value, "__tablename__")
+    }
+
+
+def test_the_metadata_declares_the_expected_schema_exactly():
+    """US-26 AC-3 as amended by US-34: one economy table, no legacy counterpart."""
+    assert set(UserGameProfile.metadata.tables) == EXPECTED_TABLES
+
+    assert _tables_the_game_module_declares() == {"user_game_profile"}, (
+        "US-34 deleted the legacy game model; re-adding it would resurrect a table "
+        "that migration v005 drops"
+    )
 
 
 def test_user_game_profile_exported_from_package():
-    """US-26: exported from ``src.models`` and listed in ``__all__``."""
+    """US-26 / US-34: the package exports the auth models plus the economy row."""
     import src.models as models_package
 
     assert models_package.UserGameProfile is UserGameProfile
-    assert "UserGameProfile" in models_package.__all__
-    assert "UserStats" in models_package.__all__  # kept (D-6)
+    assert set(models_package.__all__) == EXPECTED_EXPORTED_MODELS
 
 
 def test_profile_table_and_columns_match_the_story():
@@ -252,17 +294,18 @@ def test_profile_defaults_are_zero_and_level_one():
     assert table.c.level.default.arg == 1
 
 
-def test_models_coexist_without_name_or_table_collision():
-    """US-26 AC-3: both classes on the same MetaData, two distinct tables."""
-    metadata = UserGameProfile.metadata
-    assert metadata is UserStats.metadata
-    assert "user_game_profile" in metadata.tables
-    assert "user_stats" in metadata.tables
-    assert metadata.tables["user_game_profile"] is not metadata.tables["user_stats"]
+def test_the_game_module_contributes_one_table_to_the_metadata():
+    """US-26 AC-3 as of US-34: the economy row is the ONLY game table declared.
 
-    # class names differ from each other and from the table names
-    assert UserGameProfile.__tablename__ != UserStats.__tablename__
-    assert UserGameProfile.__name__ != UserStats.__name__
+    The co-existence this test used to pin (two classes, two distinct tables on one
+    MetaData) ended with the legacy table: v005 drops it, so a second game table in
+    ``Base.metadata`` here would mean an ORM model that recreates a table the schema
+    no longer has — and ``Base.metadata.create_all`` rebuilds the test database.
+    """
+    assert _tables_the_game_module_declares() == {"user_game_profile"}
+    assert UserGameProfile.metadata.tables["user_game_profile"] is (
+        UserGameProfile.__table__
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -425,32 +468,32 @@ async def test_pg_orphan_user_id_is_rejected(session):
     await session.rollback()
 
 
-async def test_pg_both_tables_hold_rows_for_the_same_user(session):
-    """US-26 AC-3: the legacy table and the new one coexist per user (D-6)."""
-    user_id = str(uuid7())
-    await _seed_user(session, user_id)
-    session.add_all(
-        [
-            UserStats(user_id=user_id, correct_count=3, incorrect_count=1, points=12),
-            UserGameProfile(
-                user_id=user_id, total_xp=128, level=2, current_streak=2, best_streak=2
-            ),
-        ]
-    )
-    await session.commit()
+async def test_pg_builds_no_legacy_table_from_the_metadata(session):
+    """US-34 AC-1/AC-2 against a real catalog: the ORM builds one game table.
 
-    stats = (
-        await session.execute(select(UserStats).where(UserStats.user_id == user_id))
-    ).scalar_one()
-    profile = (
-        await session.execute(
-            select(UserGameProfile).where(UserGameProfile.user_id == user_id)
+    ``Base.metadata.create_all`` is what every ORM-backed fixture in this suite uses
+    (``conftest.async_engine``, this file's ``session``), so a stale legacy class in
+    :mod:`src.models.game` would reappear here as a table even though migration v005
+    drops it — a schema the tests run against and the schema production reaches would
+    then differ. The catalog is the authority that settles it.
+    """
+    tables = (
+        (
+            await session.execute(
+                text(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'public'"
+                )
+            )
         )
-    ).scalar_one()
+        .scalars()
+        .all()
+    )
 
-    assert stats.points == 12  # legacy column untouched
-    assert profile.total_xp == 128
-    assert profile.level == 2
+    assert "user_game_profile" in tables
+    assert LEGACY_TABLE not in tables, (
+        "a stale model in src.models.game rebuilt the table v005 drops"
+    )
 
 
 # --------------------------------------------------------------------------- #

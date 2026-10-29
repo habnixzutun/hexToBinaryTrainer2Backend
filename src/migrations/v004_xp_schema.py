@@ -3,13 +3,13 @@
 Sprint 4, plan ``docs/sprint4-plan.md`` D-6 (Rev 3, R-1). The schema change is
 split across TWO migrations on purpose:
 
-* **v004 (this file) — CREATE only.** Creates ``user_game_profile`` and leaves
-  ``user_stats`` completely in place, so the legacy ``/api/game/correct`` and
-  ``/api/game/incorrect`` routers keep working and every commit in the cascade
-  boots with a green suite (sprint gate #1).
-* v005 — ``DROP TABLE user_stats``, delivered with **US-34** at sprint close in
-  the same release train as the frontend switch, once US-33/US-36/US-37 removed
-  every reader and writer. Deleting the table here would break
+* **v004 (this file) — CREATE only.** Creates ``user_game_profile`` and leaves the
+  legacy Sprint-2 counters table completely in place, so that era's two legacy
+  score writers kept working and every commit in the cascade booted with a green
+  suite (sprint gate #1).
+* v005 — the ``DROP``, delivered with **US-34** at sprint close in the same release
+  train as the frontend switch, once US-32/US-33 removed every writer and
+  US-35/US-36/US-37 every reader. Dropping the table here would have broken
   ``src/routers/game.py`` / ``src/routers/user.py`` at import time.
 
 Rev 2 had v004 drop the table on Day 1; Rev 3 corrected that (R-1, CRITICAL).
@@ -80,9 +80,9 @@ async def mark_migration_applied(session: AsyncSession) -> None:
 async def run_migration(session: AsyncSession) -> None:
     """Apply migration v004: create the XP-economy profile table.
 
-    ADDITIVE ONLY — never touches ``user_stats`` (D-6 / Rev 3 R-1). Depends only
-    on ``users`` from v001, so a database that never ran v002/v003 still reaches
-    the same end state (US-27 AC-5).
+    ADDITIVE ONLY — never touches the legacy counters table (D-6 / Rev 3 R-1);
+    v005 (US-34) owns the ``DROP``. Depends only on ``users`` from v001, so a
+    database that never ran v002/v003 still reaches the same end state (US-27 AC-5).
 
     Args:
         session: AsyncSession for database operations
