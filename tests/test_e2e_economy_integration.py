@@ -53,8 +53,13 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from src.database.engine import get_db
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from src.config import get_settings
+from src.database.engine import Base, get_db
 from src.main import app
 from src.models.game import UserGameProfile
 from src.routers.auth import get_email_service
@@ -418,28 +423,57 @@ _ROW_SQL = text(
 )
 _ATTEMPTS_SQL = text("SELECT count(*) FROM rate_limit_attempt WHERE key = :k")
 
-_board_cleaned = False
 
+@pytest.fixture
+async def async_engine(_test_db_ready):
+    """One ephemeral PostgreSQL schema per test — how this module stays hermetic.
 
-@pytest.fixture(autouse=True)
-async def hermetic_board(async_engine):
-    """Empty the economy tables once per module, before the first journey answer.
+    Shadowing conftest's ``async_engine`` is deliberate. conftest builds its engine
+    over ``public``, and ``public`` is shared by every pytest session pointed at the
+    test container on 5434 — which Sprint 4's parallel agents do. Two sessions on one
+    schema therefore interleave in both directions: a foreign row lands inside this
+    module's board assertions (US-36's board ranks the WHOLE table, so a default-limit
+    top-50 cannot tell my one journey row from someone else's fifty), and the cleanup
+    this module would need in exchange — the ``TRUNCATE users CASCADE`` an earlier
+    revision ran — deletes the OTHER session's users mid-test. That trade was measured
+    as ``assert 58 == 50`` on the default-limit board and a missing top-10 row in the
+    journey, on a file that passes green in isolation.
 
-    US-36's board is a ranking over the WHOLE table, so step 7's claim ("the journey
-    is on the board, in order") and this module's ordering/bound assertions are only
-    decidable against a table this module owns. conftest keeps rows across tests and
-    resets the schema only at session end, so leftovers from earlier sessions — and
-    from the 40-odd economy rows ``tests/test_answer_endpoint.py`` writes — would
-    otherwise decide whether the journey's 25,752 XP makes the top 10. The
-    truncation runs once (a module-level flag) on the first test of this file, on
-    the same engine conftest built, and it is the same class of operation conftest
-    itself performs at session teardown.
+    So nothing here is cleaned; nothing here is shared instead. Every table this module
+    touches lives in a schema that exists for exactly one test and is dropped with it,
+    and ``search_path`` is pinned on the connection through asyncpg's server settings —
+    so no statement of this module, and no statement of the app behind the overridden
+    ``get_db`` / ``answer_rate_limit_session``, can resolve against ``public`` at all.
+    A leaked row becomes impossible by construction rather than by discipline, in both
+    directions.
     """
-    global _board_cleaned
-    if not _board_cleaned:
-        async with async_engine.begin() as conn:
-            await conn.execute(text("TRUNCATE TABLE users CASCADE"))
-        _board_cleaned = True
+    settings = get_settings()
+    schema = f"us41_{str(uuid7()).replace('-', '')}"
+
+    bootstrap = create_async_engine(settings.async_database_url, echo=False)
+    try:
+        async with bootstrap.begin() as conn:
+            await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+    finally:
+        await bootstrap.dispose()
+
+    engine = create_async_engine(
+        settings.async_database_url,
+        echo=False,
+        connect_args={"server_settings": {"search_path": f'"{schema}"'}},
+    )
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        yield engine
+    finally:
+        await engine.dispose()
+        teardown = create_async_engine(settings.async_database_url, echo=False)
+        try:
+            async with teardown.begin() as conn:
+                await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        finally:
+            await teardown.dispose()
 
 
 _used_ips: set[str] = set()
@@ -449,12 +483,14 @@ def _client_ip() -> str:
     """A client IP no other test of this session shares.
 
     The auth rate limits (``register:{ip}:{email}``, ``login:{ip}:{email}``) and the
-    US-05 brute-force lockout key on the client IP, and ``rate_limit_attempt`` rows
-    survive every test — conftest resets the schema only once, at session end.
-    Against the shared ``127.0.0.1`` the failed-login tests elsewhere in the suite
-    can lock THIS suite's logins out at random: green in isolation, red in
-    ``pytest``. Each test therefore registers from its own address. The addresses are
-    real IPv4 shapes because they land in ``audit_log.ip_address`` verbatim.
+    US-05 brute-force lockout key on the client IP, so against a shared table the
+    failed-login tests elsewhere in the suite could lock THIS suite's logins out at
+    random: green in isolation, red in ``pytest``. :func:`async_engine` now gives each
+    test its own schema, which settles that for the tables of this module; the distinct
+    addresses stay because they are also what makes the walk a real one — every
+    ``audit_log.ip_address`` row here carries a plausible origin instead of the loopback
+    the other suites share. The addresses are real IPv4 shapes because that column is
+    an ``inet`` written verbatim.
     """
     while True:
         tail = str(uuid7()).replace("-", "")[-4:]
@@ -466,7 +502,11 @@ def _client_ip() -> str:
 
 @pytest.fixture
 async def db(async_engine) -> AsyncSession:
-    """This test's own read session, over the engine conftest pointed at Postgres."""
+    """This test's own read session, over the engine of :func:`async_engine`.
+
+    Deliberately the SAME engine the app runs on: a read side that agreed with the
+    endpoint only because it queried a different schema would prove nothing.
+    """
     factory = async_sessionmaker(
         async_engine, class_=AsyncSession, expire_on_commit=False
     )
