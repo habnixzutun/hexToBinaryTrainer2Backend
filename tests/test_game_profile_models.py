@@ -102,14 +102,13 @@ PROFILE_RESPONSE_FIELDS: tuple[str, ...] = (
     "unlocks",
 )
 
-# plan US-36 — leaderboard entry shape (drops `points`, carries no PII).
+# plan US-36 as reduced by US-43 AC-1 (:78) — leaderboard entry shape: drops
+# `points` AND the two counters, and carries no PII.
 LEADERBOARD_ENTRY_FIELDS: tuple[str, ...] = (
     "user_id",
     "username",
     "total_xp",
     "level",
-    "correct_count",
-    "incorrect_count",
 )
 
 # plan US-33: the normative golden fixture ("verify these hold in the schema test").
@@ -745,7 +744,7 @@ def test_xp_delta_may_be_zero_or_negative():
 
 
 def test_leaderboard_entry_v2_has_no_points_and_no_pii():
-    """US-36 AC-4: no ``points``, no email — username plus game numbers only."""
+    """US-36 AC-4 / US-43 AC-1: four fields — no ``points``, no counters, no email."""
     assert tuple(LeaderboardEntryV2.model_fields) == LEADERBOARD_ENTRY_FIELDS
 
     entry = LeaderboardEntryV2(
@@ -753,23 +752,25 @@ def test_leaderboard_entry_v2_has_no_points_and_no_pii():
         username="alice",
         total_xp=1320,
         level=6,
-        correct_count=42,
-        incorrect_count=5,
     )
     assert entry.model_dump() == {
         "user_id": "u-1",
         "username": "alice",
         "total_xp": 1320,
         "level": 6,
-        "correct_count": 42,
-        "incorrect_count": 5,
     }
     assert "points" not in entry.model_dump()
     assert "email" not in entry.model_dump()
+    assert "correct_count" not in entry.model_dump()
+    assert "incorrect_count" not in entry.model_dump()
 
 
 def test_leaderboard_entry_v2_refuses_a_points_field():
-    """The Rev-3 decision: no deprecated ``points`` alias (US-36, YAGNI)."""
+    """The Rev-3 decision: no deprecated ``points`` alias (US-36, YAGNI).
+
+    Since US-43 the two counters are extras on this model too, refused by the same
+    ``extra="forbid"`` — pinned in layer 1 of ``tests/test_leaderboard.py``.
+    """
     with pytest.raises(ValidationError):
         LeaderboardEntryV2.model_validate(
             {
@@ -777,15 +778,13 @@ def test_leaderboard_entry_v2_refuses_a_points_field():
                 "username": "alice",
                 "total_xp": 1,
                 "level": 1,
-                "correct_count": 0,
-                "incorrect_count": 0,
                 "points": 12,
             }
         )
 
 
 def test_leaderboard_response_wrapper():
-    """The ``{entries: [...]}`` wrapper is kept (US-36)."""
+    """The ``{entries: [...]}`` wrapper is kept (US-36), over the US-43 element."""
     response = LeaderboardResponseV2(
         entries=[
             LeaderboardEntryV2(
@@ -793,8 +792,6 @@ def test_leaderboard_response_wrapper():
                 username="alice",
                 total_xp=1320,
                 level=6,
-                correct_count=42,
-                incorrect_count=5,
             )
         ]
     )

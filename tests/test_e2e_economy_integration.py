@@ -251,9 +251,9 @@ _ME_FIELDS: frozenset[str] = frozenset(
     }
 )
 
-_BOARD_FIELDS: frozenset[str] = frozenset(
-    {"user_id", "username", "total_xp", "level", "correct_count", "incorrect_count"}
-)
+# US-43 AC-1: four fields — the counters left the wire, `incorrect_count` only as the
+# ranking rule the database still orders by (see :func:`_assert_board_order`).
+_BOARD_FIELDS: frozenset[str] = frozenset({"user_id", "username", "total_xp", "level"})
 
 
 def _check_invariants(body: dict[str, Any], answers: int) -> None:
@@ -643,15 +643,30 @@ async def _attempts(db: AsyncSession, user_id: str) -> int:
     return result.scalar_one()
 
 
-def _assert_board_order(entries: list[dict[str, Any]]) -> None:
+async def _assert_board_order(db: AsyncSession, entries: list[dict[str, Any]]) -> None:
     """US-36's total order: ``total_xp DESC``, then ``incorrect_count ASC``, then
-    ``user_id ASC`` — stable across a 30-second client poll by construction."""
+    ``user_id ASC`` — stable across a 30-second client poll by construction.
+
+    US-43 took both counters off the wire and left ``incorrect_count`` a ranking rule
+    only, so the tiebreak can no longer be read off the payload. It is fetched from
+    the database instead — the very column the server orders by — which keeps this
+    helper asserting the ORDER rather than degrading into a row-count check.
+    """
+    await db.rollback()  # no ambient transaction, so no stale snapshot
+    tiebreaks = {
+        row.user_id: row.incorrect_count
+        for row in (
+            await db.execute(
+                text("SELECT user_id, incorrect_count FROM user_game_profile")
+            )
+        ).all()
+    }
     keys = [
-        (-entry["total_xp"], entry["incorrect_count"], entry["user_id"])
+        (-entry["total_xp"], tiebreaks[entry["user_id"]], entry["user_id"])
         for entry in entries
     ]
     assert keys == sorted(keys), [
-        (entry["total_xp"], entry["incorrect_count"]) for entry in entries
+        (entry["total_xp"], tiebreaks[entry["user_id"]]) for entry in entries
     ]
 
 
@@ -775,16 +790,16 @@ async def test_journey_from_registration_to_the_leaderboard(client, db, email_se
     board = await client.get(_LEADERBOARD_URL, params={"limit": 10})
     assert board.status_code == 200, board.text
     entries = board.json()["entries"]
-    _assert_board_order(entries)
+    await _assert_board_order(db, entries)
     mine = [entry for entry in entries if entry["user_id"] == user_id]
     assert len(mine) == 1, [entry["username"] for entry in entries]
+    # US-43 AC-1: the journey's rank, four fields — the 47/5 counters it earned are
+    # still on /profile and still order the board, but they are not on this wire.
     assert mine[0] == {
         "user_id": user_id,
         "username": username,
         "total_xp": 25752,
         "level": 13,
-        "correct_count": 47,
-        "incorrect_count": 5,
     }
     for entry in entries:
         assert set(entry) == _BOARD_FIELDS  # no PII, no legacy `points` (US-34)
@@ -929,10 +944,11 @@ async def test_leaderboard_is_public_with_no_authorization_at_all(
     assert set(payload) == {"entries"}
     assert isinstance(payload["entries"], list)
     assert len(payload["entries"]) == min(rows, 50)  # the US-36 default bound
-    _assert_board_order(payload["entries"])
+    await _assert_board_order(db, payload["entries"])
     for entry in payload["entries"]:
         assert set(entry) == _BOARD_FIELDS
         assert "email" not in entry and "points" not in entry
+        assert "correct_count" not in entry and "incorrect_count" not in entry
 
     authenticated = await client.get(_LEADERBOARD_URL, headers=headers)
     assert authenticated.status_code == 200, authenticated.text

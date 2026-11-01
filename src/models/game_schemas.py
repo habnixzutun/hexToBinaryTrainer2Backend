@@ -30,9 +30,10 @@ What is pinned here and consumed downstream:
   ignored, because both models forbid extra fields.
 * :class:`UnlockEntry` — ONE element type for ``newly_unlocked`` (US-33) and
   ``unlocks`` (US-35), shape ``{mode, bit_width, min_level}`` (R-9).
-* :class:`LeaderboardEntryV2` + :class:`LeaderboardResponseV2` — US-36: entry
-  without ``points`` and without PII, inside the unchanged ``{entries: [...]}``
-  wrapper.
+* :class:`LeaderboardEntryV2` + :class:`LeaderboardResponseV2` — US-36, slimmed by
+  US-43: an entry is ``{user_id, username, total_xp, level}`` and nothing else — no
+  ``points`` (US-34), no PII, no per-statistic columns (US-43) — inside the unchanged
+  ``{entries: [...]}`` wrapper.
 
 Like ``game_config``, this module is import-side-effect free (pydantic + the
 frozen registry), so routers, tests and OpenAPI generation can all import it.
@@ -268,12 +269,18 @@ class ProfileResponse(BaseModel):
 
 
 class LeaderboardEntryV2(BaseModel):
-    """One row of the public leaderboard (US-36).
+    """One row of the public leaderboard (US-36, reduced by US-43).
 
-    Deliberately **no** ``points`` — the legacy field is dropped, not aliased
-    (Rev 3: no deprecated alias to remove again in US-34) — and no PII: an entry
-    carries ``username`` plus game numbers only, which is what keeps the endpoint
-    public without auth (PO decision R-3/OQ-9).
+    Four fields and no more: ``user_id`` is what US-44 keys the "this is me" badge
+    off, ``username`` plus the two economy numbers are all a spectator needs. The
+    legacy ``points`` is gone outright, not aliased (Rev 3: no deprecated alias to
+    remove again in US-34), and US-43 removed ``correct_count`` / ``incorrect_count``
+    just as outright — the tiebreak they carried still ranks the rows, it is simply
+    no longer serialized (:mod:`src.services.leaderboard_service`).
+
+    Keeping this at four is what makes public-ness defensible: no e-mail, no PII,
+    nothing user-controlled (PO decision R-3/OQ-9). ``extra="forbid"`` is held onto
+    for that reason — a field cannot be re-added to the wire by a future handler.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -282,10 +289,6 @@ class LeaderboardEntryV2(BaseModel):
     username: str
     total_xp: int = Field(ge=0)
     level: int = Field(ge=1)
-    correct_count: int = Field(ge=0)
-    incorrect_count: int = Field(
-        ge=0, description="Tiebreak 1: fewer mistakes ranks higher."
-    )
 
 
 class LeaderboardResponseV2(BaseModel):
