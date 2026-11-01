@@ -310,8 +310,11 @@ async def get_leaderboard(
     unchanged from the Sprint-2 board; what changed underneath is the source
     (``user_game_profile``, not the legacy counters table), the total order
     (``total_xp DESC``, ``incorrect_count ASC``, ``user_id ASC``) and the entry
-    fields — the legacy score field is gone outright, with no deprecated alias,
-    because an alias would only have been removed again by US-34.
+    fields. An entry is four fields since US-43 — ``{user_id, username, total_xp,
+    level}`` — because the legacy score field and the two counters are all gone
+    outright, with no deprecated alias anywhere (an alias would only have been
+    removed again by US-34). ``incorrect_count`` still orders the rows; the service
+    reads it for that alone and does not serialize it.
 
     Raises:
         HTTPException: 422 (``limit`` outside 1..100, or not an integer),

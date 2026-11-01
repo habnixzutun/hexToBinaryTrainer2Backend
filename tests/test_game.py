@@ -473,16 +473,18 @@ async def test_leaderboard_entry_shape_has_no_points_and_no_pii(
     assert list(data) == ["entries"]  # the unchanged wrapper
     assert len(data["entries"]) == 1
     entry = data["entries"][0]
+    # US-43 AC-1: four fields and nothing else — the counters left the wire with no
+    # alias, exactly like the legacy score field before them.
     assert entry == {
         "user_id": USER_ID,
         "username": USER_USERNAME,
         "total_xp": 1320,
         "level": 6,
-        "correct_count": 42,
-        "incorrect_count": 5,
     }
     assert "points" not in entry
     assert "email" not in entry
+    assert "correct_count" not in entry
+    assert "incorrect_count" not in entry
     assert "secret" not in response.text
 
 
@@ -563,7 +565,9 @@ async def test_leaderboard_sorts_by_total_xp_then_tiebreaks(
         "user-lb-e",
     ]
     assert [e["total_xp"] for e in entries] == [5000, 1320, 1320, 1320, 4]
-    assert [e["incorrect_count"] for e in entries] == [40, 2, 9, 9, 0]
+    # US-43 AC-2: the tiebreak still ranks the rows, it is only no longer serialized —
+    # the order the usernames pin above is the evidence, not a column on the wire.
+    assert all("incorrect_count" not in e and "correct_count" not in e for e in entries)
 
 
 # Enough rows to make the DEFAULT of 50 a measurement rather than a schema read.
@@ -723,14 +727,12 @@ async def test_a_divergent_stored_level_is_reported_as_derived(
     assert {key: me[key] for key in ME_ECONOMY_FIELDS} == {
         key: PROFILE_GOLDEN[key] for key in ME_ECONOMY_FIELDS
     }
-    # US-36: the rank, with no ``points`` and the same derived level.
+    # US-36/US-43: the rank, four fields, with the same derived level.
     assert entry == {
         "user_id": USER_ID,
         "username": USER_USERNAME,
         "total_xp": 1320,
         "level": 6,
-        "correct_count": 42,
-        "incorrect_count": 5,
     }
 
     # And the row was left exactly as seeded: a read reports, it never repairs.

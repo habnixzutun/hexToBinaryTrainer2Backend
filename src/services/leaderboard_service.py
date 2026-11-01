@@ -12,6 +12,14 @@ not:
   makes the whole thing a TOTAL order: ``user_id`` is the primary key, so no two
   rows can tie and a client polling every 30 s never sees the same board reshuffle
   between two requests (the "stable ordering" of US-36).
+* **Entry shape** — four fields since US-43: ``{user_id, username, total_xp,
+  level}``. ``user_id`` stays because US-44 identifies the viewer's own row with it;
+  the two counters are gone, one of them (``incorrect_count``) as a *ranking rule
+  only*: it is still read here, because the ORDER BY needs it, and never serialized.
+  That is why the projection names columns explicitly instead of loading
+  ``select(UserGameProfile, ...)`` — a whole-row read makes the poll pay for
+  ``current_streak``, ``best_streak``, ``correct_count`` and ``updated_at``, none of
+  which this endpoint can show.
 * **Bound** — ``limit`` is validated 1..100 with a default of 50, closing the
   unbounded-query smell BE-6 logged against the legacy handler.
 
@@ -80,10 +88,12 @@ async def leaderboard_entries(
             asked wrong, and a silent clamp would make the bound invisible.
 
     Returns:
-        One :class:`LeaderboardEntryV2` per ranked player, in order, with no
-        legacy score field and no PII field (US-36 AC-4). An empty list when
-        nobody has answered yet — the wrapper is the router's, and it stays
-        ``{entries: []}``.
+        One :class:`LeaderboardEntryV2` per ranked player, in order — four fields
+        (``user_id``, ``username``, ``total_xp``, ``level``), with no legacy score
+        field, no PII field and no statistic column (US-36 AC-4, US-43 AC-1). The
+        ``level`` is derived from ``total_xp`` by the D-1 curve, never read from the
+        stored column. An empty list when nobody has answered yet — the wrapper is
+        the router's, and it stays ``{entries: []}``.
 
     Raises:
         ValueError: ``limit`` outside 1..100 (the service-side half of the bound).
@@ -94,8 +104,16 @@ async def leaderboard_entries(
             f"{LEADERBOARD_MAX_LIMIT}, got {limit}"
         )
 
+    # Explicit projection (US-43): the three columns the entry shows, plus the
+    # tiebreak the ORDER BY needs and the serializer must never see. ``row`` keeps
+    # that fourth value out of :class:`LeaderboardEntryV2` by never naming it there.
     result = await session.execute(
-        select(UserGameProfile, User.username)
+        select(
+            UserGameProfile.user_id,
+            User.username,
+            UserGameProfile.total_xp,
+            UserGameProfile.incorrect_count,
+        )
         .join(User, User.id == UserGameProfile.user_id)
         .order_by(
             desc(UserGameProfile.total_xp),
@@ -107,12 +125,12 @@ async def leaderboard_entries(
 
     return [
         LeaderboardEntryV2(
-            user_id=profile.user_id,
-            username=username,
-            total_xp=profile.total_xp,
-            level=level_from_xp(profile.total_xp),
-            correct_count=profile.correct_count,
-            incorrect_count=profile.incorrect_count,
+            user_id=row.user_id,
+            username=row.username,
+            total_xp=row.total_xp,
+            # Phase 2b H1: derived from XP, never the stored ``level`` column, so the
+            # board cannot disagree with /profile, /me or the next /answer.
+            level=level_from_xp(row.total_xp),
         )
-        for profile, username in result.all()
+        for row in result.all()
     ]

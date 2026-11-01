@@ -788,6 +788,11 @@ order, so a client polling the board never sees tied rows reshuffle between two
 requests. Players without a profile row are absent ("has not played yet" is not a
 rank). No `points` field, and no deprecated alias for it.
 
+An entry is **four fields** (US-43): `user_id` is what the client keys its own row
+off, and `correct_count` / `incorrect_count` are gone outright like the legacy score
+field before them — `incorrect_count` still ranks the rows, it is only no longer
+serialized. The counters remain readable on `/api/game/profile` and `/api/user/me`.
+
 **Response:** `200 OK`
 ```json
 {
@@ -796,9 +801,7 @@ rank). No `points` field, and no deprecated alias for it.
       "user_id": "01234567-89ab-cdef-0123-456789abcdef",
       "username": "username",
       "total_xp": 1320,
-      "level": 6,
-      "correct_count": 42,
-      "incorrect_count": 5
+      "level": 6
     }
   ]
 }
@@ -1363,6 +1366,10 @@ multiple of 4, and **no rounding path exists anywhere in the engine**.
   Path, the `{entries: [...]}` wrapper and **public visibility are unchanged** (no auth,
   PO decision Rev 3 R-3 / OQ-9); the abuse controls are the bounded `limit` (1–100,
   enforced twice) and the absence of PII from the entry shape
+- **Leaderboard entry reduced to four fields (US-43)**: `{user_id, username, total_xp,
+  level}`. `correct_count` / `incorrect_count` left the payload with no alias, and the
+  service projects the columns it needs instead of loading the whole row, so the
+  30-second poll stops paying for `current_streak`, `best_streak` and `updated_at`
 - `GET /api/user/me` reports the economy counters from `user_game_profile` instead of
   the legacy stats row, and agrees with `/api/game/profile` field for field (US-37)
 - `bit_width` speaks **bits in every mode** (OQ-7): 4/8/16/32 for `hex_to_bin` /

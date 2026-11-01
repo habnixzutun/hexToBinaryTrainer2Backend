@@ -8,8 +8,8 @@
 > Sprint-1-Punktelogik (`+bits` / `−4·bits`), ihre zwei Scoring-Routen oder die
 > Legacy-Statistiktabelle erwähnen, ist das **Zeitgeschichte** — US-34 (Sprint 4) hat Ende
 > Oktober 2026 beides entfernt und durch die XP-Economy ersetzt
-> ([`docs/xp-economy.md`](xp-economy.md)). Aktuelle offene Punkte: **TD-01/TD-02** unten
-> sowie die `US-34-Nachzug`-Story.
+> ([`docs/xp-economy.md`](xp-economy.md)). Aktuelle offene Punkte: **TD-01/TD-02/TD-03**
+> unten, die `US-34-Nachzug`-Story und der **Sprint-5-Block** (US-43…US-47, TD-04/TD-05/TD-07).
 
 ## Befund-Lage (harte Fakten aus dem Code)
 
@@ -316,6 +316,125 @@ stehen: alle acht Zahlenfelder von `ProfileResponse`, `user_id`/`username`/`tota
 `docs/xp-economy.md` vollständig dokumentiert, und kein Client scheitert heute an
 fehlenden Annotationen. Der Wert ist generierte-Client-Treue und Self-Service im
 Swagger UI — real, aber nicht blockierend.
+
+---
+
+## TD-04: Leaderboard-Refetch im Gastmodus bleibt
+
+**Priorität:** Niedrig (P3) · **Komplexität:** LOW · **Dependencies:** US-44 (merged)
+**Quelle:** Sprint 5 Planning (2026-11-01) — bewusst aus US-44 ausgeklammert
+
+**Kontext.** US-44 entfernt den Leaderboard-Refetch pro Antwort für **angemeldete**
+Spieler (`handleGameResult` bumped nicht mehr `refreshKey`). Der Gastpfad bleibt
+unangetastet: `updateUserData` (`src/App.tsx:52-55`) bumppt weiterhin, und ein Gast
+produziert damit pro Antwort weiterhin einen `GET /api/game/leaderboard`, obwohl seine
+Antwort nie den Server erreicht. Die Zahl der gleichzeitigen Gäste ist klein, und das
+Leaderboard ist für Gäste ohnehin statisch — der Request ist Verschwendung, aber keine
+Gefahr.
+
+**Wann das angefasst wird.** Messbares Signal (Proxy-Last, Rate-Limit-Hits ohne
+Passing-Spiel) oder eine kommende Gast-Statistik-Anforderung. Ohne Signal: YAGNI.
+
+---
+
+## TD-05: Tote i18n-Keys und toter Context-State nach dem HUD-Abbau
+
+**Priorität:** Niedrig (P3) · **Komplexität:** LOW · **Dependencies:** US-45 (merged)
+**Quelle:** Sprint 5 Planning (2026-11-01)
+
+**Kontext.** US-45 bereinigt die direkt betroffenen Leichen mit (`lastAnswer` aus dem
+AuthContext, `hudLabel`/`xpProgress`/`streak`/`bestStreak` aus beiden Locales samt
+Interface und `test/i18n/translations.test.ts`). Zwei Reste bleiben übrig, weil sie nicht
+sicher zu entscheiden sind, ohne die UI erneut anzufassen:
+
+1. **Anzeigelücke Streak/Fortschritt.** Mit dem HUD verschwinden `current_streak`,
+   `best_streak` und der XP-Fortschrittsbalken **vollständig** aus der Oberfläche — die
+   Sidebar zeigt nur OK/ERR/XP. Das ist der ausdrückliche Wunsch aus Sprint 5
+   („weniger anzeigen"), kein Versehen. Falls Spieler die Serie vermissen, ist das eine
+   neue Story (Sidebar-Erweiterung oder Trainer-inline), keine Nacharbeit an US-45.
+2. **`correct_count`/`incorrect_count` in `ProfileResponse` und `/api/user/me`.**
+   Diese Felder leben weiter (Sidebar-Statistik), aber nach US-43 gibt es **keinen**
+   Konsumenten mehr, der sie im Leaderboard-Kontext braucht. Wer sie irgendwann
+   entferne will, muss zuerst die Sidebar-Anforderung klären. Bewusst nicht in US-43
+   angefasst — sonst verschiebt sich eine Visual-Story in die Auth- und Profil-Schiene.
+
+---
+
+## TD-07: Test-Harness für App-Tests extrahieren (DRY)
+
+**Priorität:** Niedrig (P3) · **Komplexität:** LOW · **Dependencies:** US-45 (merged)
+**Quelle:** US-45 Code-Review (2026-11-01) — der Reviewer hat die Extraktion bewusst **nicht**
+in diese Story genommen (Rahmen: HUD entfernen), aber verlangt, dass die dritte Kopie nicht
+unkompensiert bleibt. *Nummerierung: **TD-06 ist unbesetzt** — die 07 kommt aus dem
+Review-Kontext und bleibt so stehen.*
+
+**Kontext.** Drei Testdateien fahren `App` durch den **echten** `AuthProvider` und mocken nur
+die HTTP-Schicht. Genau dieser Rand ist dreimal kopiert:
+
+| Datei | Mock-Block | Kopierte Setup-Logik |
+|---|---|---|
+| `test/App.test.tsx` | `:10-26` | `:49` `DESKTOP_WIDTH`, `:72` `setViewportWidth`, `:86-100` beforeEach, `:105` afterEach |
+| `test/App.defaultTier.test.tsx` | `:24-36` | `:42` `DESKTOP_WIDTH`, `:66` `setViewportWidth`, `:88-95` beforeEach, `:100` afterEach |
+| `test/App.gameHud.test.tsx` (US-45) | `:23-36` | `:66` `setViewportWidth`, `:96-105` beforeEach, `:109` afterEach |
+
+Identisch sind: die zwei `vi.mock`-Fabriken (`authApi` mit fünf Fns, `gameApi` mit zwei),
+`vi.mocked(...)`-Aliases, `setViewportWidth` nebst `Object.defineProperty(window, 'innerWidth', …)`,
+`setPersistenceEnabled(true)`, `vi.spyOn(Math, 'random').mockReturnValue(0.5)`, dieselbe
+Dreierfolge `refreshAccessToken`-Reject / `login`-Resolve / `getCurrentUser`-Resolve sowie
+`vi.restoreAllMocks()` im `afterEach`.
+
+**Drift ist schon eingetreten.** `App.gameHud.test.tsx:97` ruft `setViewportWidth(1280)` mit
+ nackter Zahl, während die beiden anderen `DESKTOP_WIDTH = 1280` führen. Das ist der Beleg,
+dass Kopie 3 kein Kavaliersdelikt ist: Der Magic Value ist der erste Kandidat, der beim
+nächsten Mobile-Case still falsch mitschwingt.
+
+**Beschreibung.** Extraktion nach `test/helpers/appRender.ts` mit mindestens:
+- `mockAuthApis()` — legt beide `vi.mock`-Fabriken an und gibt `{ mockedAuthApi, mockedGameApi }`
+  (die `vi.mock`-Calls selbst müssen hoisted in jeder Datei bleiben; die Fabrik-Inhalte und
+  die Alias-Bildung wandern in den Helper),
+- `signIn()` / `beforeEach`-Verschnitt — `setPersistenceEnabled(true)`, Viewport,
+  `Math.random`-Pin, die drei Auth-Resolves und `getLeaderboard`,
+- `DESKTOP_WIDTH` (und `MOBILE_WIDTH`, falls `App.defaultTier.test.tsx:43` mitkommt),
+- `setViewportWidth(width)` als geteilte Utility statt dreier Kopien.
+
+**Akzeptanzkriterien.**
+1. Kein `vi.mock`-Block und keine `beforeEach`-Zeile mehr, die wörtlich in zwei der drei
+   Dateien steht (Grep-Beleg im PR).
+2. Die 440 Tests bleiben grün, **ohne** dass eine Assertion geändert wird — der Helper ändert
+   das Setup, nicht die Erwartung.
+3. `DESKTOP_WIDTH`/`MOBILE_WIDTH` kommen aus dem Helper; `App.gameHud.test.tsx:97` erhält
+   keine nackte Zahl mehr.
+4. `tsc --noEmit` und `npm run lint` fehlerfrei; Coverage-Schwellen halten (der Helper selbst
+   ist Test-Code und zählt nicht in die `src/`-Schwellen).
+
+**Warum P3.** Reine Wartbarkeit, kein Nutzerverhalten. Der Schmerz ist proportional zur
+**vierten** App-Test-Datei: Solange es bei drei bleibt, sind die rund 30 Zeilen Duplikat
+tragbar. Kommt eine vierte hinzu — oder wird der Mobile-Breakpoint echte Testmaterie —,
+ist diese Story **vor** der Feature-Arbeit zu ziehen, nicht danach.
+
+---
+
+## Sprint 5 — Visuelle Nacharbeit & Onboarding-Fix
+
+**Status:** geplant (2026-11-01) · **Spec:** [`sprint5-plan.md`](sprint5-plan.md) · **Gate-Vorprüfung:** siehe dort Section 0
+
+Vier Stories, kein neues Feature, keine Migration. Alle vier zahlen Sprint-4-Debt zurück;
+die IDs folgen den Anforderungen, die Business-Value-Reihenfolge ist eine andere:
+
+| Rang | Story | Thema | Prio | Komplexität |
+|---|---|---|---|---|
+| 1 | US-46 | Default-Tier beim Login = erster freigeschalteter Tier | **P0** | LOW |
+| 2 | US-45 | GameHud entfernen, LevelUpToast umsiedeln | P1 | MEDIUM |
+| 3 | US-43 | Leaderboard auf (Name, Stufe, XP) reduzieren | P1 | MEDIUM |
+| 4 | US-44 | Eigener Leaderboard-Eintrag ohne Request aktualisieren | P2 | MEDIUM |
+
+**Wichtigste Erkenntnis aus dem Audit:** US-46 ist **kein** Optik-Bug. Der vorausgewählte
+8-Bit-Tier lässt die allererste Antwort eines Level-1-Spielers am Unlock-Gate
+(`src/routers/game.py:164-208`, UN-05) mit **403** scheitern. Darum P0 und Welle 1.
+
+**Offene Gate-Verletzung vor Sprint-Start:** Sprint 4 hat kein Review/Retro-Dokument
+(kein `docs/sprint4-review.md`). Nachholepflicht in US-47 — ohne das gilt Hausregel
+„kein Sprint startet ohne gehaltene Retro" als verletzt.
 
 ---
 
