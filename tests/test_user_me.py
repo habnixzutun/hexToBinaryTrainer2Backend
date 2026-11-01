@@ -10,7 +10,7 @@ The economy literals are copied from ``docs/sprint4-plan.md`` (D-1, US-33/US-35
 golden fixture), never derived from ``src/``.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
@@ -45,6 +45,7 @@ ME_FIELDS: tuple[str, ...] = (
     "level",
     "current_streak",
     "best_streak",
+    "next_username_change_at",  # account settings: cooldown hint for the dialog
 )
 
 # The six fields the two authenticated reads share (US-37 AC-1).
@@ -145,6 +146,7 @@ async def test_me_returns_economy_zeros_before_the_first_answer(client):
         "level": 1,  # D-1/OQ-3: a player starts at level 1 with 0 XP
         "current_streak": 0,
         "best_streak": 0,
+        "next_username_change_at": None,
     }
     assert "points" not in resp.text
 
@@ -194,8 +196,32 @@ async def test_me_reports_the_economy_profile_not_the_legacy_counters(
     assert (data["correct_count"], data["incorrect_count"]) == (1, 0)
 
 
+async def test_me_reports_the_username_cooldown_end(client, seeded_db):
+    """A change 3 days ago -> ``/me`` says the username is locked until day 7."""
+    user = await seeded_db.get(User, USER_ID)
+    changed_at = datetime.now(UTC) - timedelta(days=3)
+    user.last_username_change_at = changed_at
+    await seeded_db.commit()
+
+    data = (await client.get("/api/user/me", headers=_bearer())).json()
+
+    ends_at = datetime.fromisoformat(data["next_username_change_at"])
+    assert abs(ends_at - (changed_at + timedelta(days=7))) < timedelta(seconds=1)
+
+
+async def test_me_reports_no_cooldown_once_it_has_elapsed(client, seeded_db):
+    """A change 8 days ago -> the field is free again, so the hint is ``None``."""
+    user = await seeded_db.get(User, USER_ID)
+    user.last_username_change_at = datetime.now(UTC) - timedelta(days=8)
+    await seeded_db.commit()
+
+    data = (await client.get("/api/user/me", headers=_bearer())).json()
+
+    assert data["next_username_change_at"] is None
+
+
 async def test_me_field_set_is_frozen_and_leaks_no_hash(client):
-    """US-37 AC-4: exactly the nine keys — no ``points``, no password material."""
+    """US-37 AC-4: exactly ``ME_FIELDS`` — no ``points``, no password material."""
     resp = await client.get("/api/user/me", headers=_bearer())
 
     assert set(resp.json()) == set(ME_FIELDS)
