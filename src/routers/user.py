@@ -117,7 +117,8 @@ class UsernameChangeRequest(BaseModel):
 
 
 class UserMeResponse(BaseModel):
-    """The nine fields US-37 froze: identity, then the Sprint-4 economy numbers."""
+    """The nine fields US-37 froze (identity, then the Sprint-4 economy numbers)
+    plus the account-settings cooldown hint."""
 
     id: str
     username: str
@@ -128,6 +129,26 @@ class UserMeResponse(BaseModel):
     level: int
     current_streak: int
     best_streak: int
+    # Account settings: when the username may be changed again. ``None`` means
+    # "now" — the settings dialog uses it to lock the field up front instead of
+    # letting the user run into the 429.
+    next_username_change_at: datetime | None = None
+
+
+def _username_cooldown_ends_at(user: User) -> datetime | None:
+    """When the 7-day username cooldown ends, or ``None`` if a change is allowed now.
+
+    Single source of truth for the cooldown: ``PATCH /api/user/username`` enforces
+    it and ``GET /api/user/me`` reports it, so the UI can never disagree with the
+    server. SQLite hands back naive datetimes, hence the explicit UTC.
+    """
+    if user.last_username_change_at is None:
+        return None
+    last_change = user.last_username_change_at
+    if last_change.tzinfo is None:
+        last_change = last_change.replace(tzinfo=UTC)
+    ends_at = last_change + timedelta(days=USERNAME_CHANGE_COOLDOWN_DAYS)
+    return ends_at if datetime.now(UTC) < ends_at else None
 
 
 @router.get(
@@ -187,6 +208,7 @@ async def get_current_user(
         best_streak=snapshot.best_streak,
         correct_count=snapshot.correct_count,
         incorrect_count=snapshot.incorrect_count,
+        next_username_change_at=_username_cooldown_ends_at(user),
     )
 
 
@@ -314,19 +336,15 @@ async def change_username(
             detail="User not found.",
         )
 
-    if user.last_username_change_at is not None:
-        last_change = user.last_username_change_at
-        if last_change.tzinfo is None:
-            last_change = last_change.replace(tzinfo=UTC)
-        next_change_at = last_change + timedelta(days=USERNAME_CHANGE_COOLDOWN_DAYS)
-        if datetime.now(UTC) < next_change_at:
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail={
-                    "message": "Username can only be changed once every 7 days.",
-                    "next_change_at": next_change_at.isoformat(),
-                },
-            )
+    next_change_at = _username_cooldown_ends_at(user)
+    if next_change_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={
+                "message": "Username can only be changed once every 7 days.",
+                "next_change_at": next_change_at.isoformat(),
+            },
+        )
 
     existing = await session.execute(
         select(User).where(User.username == body.new_username)
