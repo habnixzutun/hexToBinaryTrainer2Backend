@@ -240,6 +240,9 @@ async def test_startup_lifespan_installs_email_service(monkeypatch):
     # keep every migration stubbed, or the real run_v00N hits _FakeSession.
     monkeypatch.setattr(main_module, "run_v004", _noop)
     monkeypatch.setattr(main_module, "run_v005", _noop)
+    # US-44 added v006 — keep it stubbed too.
+    monkeypatch.setattr(main_module, "run_v006", _noop)
+    monkeypatch.setattr(main_module, "run_v007", _noop)
 
     async with main_module.lifespan(main_module.app):
         pass

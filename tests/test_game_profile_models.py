@@ -208,6 +208,7 @@ EXPECTED_TABLES: frozenset[str] = frozenset(
         "user_audit_log",
         "rate_limit_attempt",
         "user_game_profile",
+        "account_deletion_tokens",  # US-47: added alongside AccountDeletionToken model
     }
 )
 

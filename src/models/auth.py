@@ -55,6 +55,9 @@ class User(Base):
     audit_logs = relationship(
         "UserAuditLog", back_populates="user", cascade="all, delete-orphan"
     )
+    account_deletion_tokens = relationship(
+        "AccountDeletionToken", back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class UserIdentity(Base):
@@ -99,6 +102,9 @@ class UserRefreshToken(Base):
 
     Opaque tokens stored as hashes. Access tokens are short-lived JWTs (15 min),
     refresh tokens are long-lived (7 days) and can be revoked.
+
+    US-44 adds four nullable device-tracking columns so each session records
+    where it was started.
     """
 
     __tablename__ = "user_refresh_tokens"
@@ -116,6 +122,12 @@ class UserRefreshToken(Base):
     created_at = Column(
         DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP")
     )
+
+    # US-44: device tracking columns (all nullable — old tokens keep NULL)
+    ip_address = Column(Text, nullable=True)
+    user_agent = Column(Text, nullable=True)
+    location_city = Column(Text, nullable=True)
+    location_country = Column(Text, nullable=True)
 
     # Relationships
     user = relationship("User", back_populates="refresh_tokens")
@@ -184,6 +196,36 @@ class UserAuditLog(Base):
     __table_args__ = (
         Index("ix_user_audit_log_user_timestamp", "user_id", "timestamp"),
     )
+
+
+class AccountDeletionToken(Base):
+    """Token for account deletion confirmation (US-47).
+
+    A time-limited, single-use token that proves the user's intent to delete
+    their account. The raw JWT is NEVER stored — only its SHA-256 hex-digest
+    (token_hash) is written to the database.
+
+    Token is single-use (used_at set after use).
+    """
+
+    __tablename__ = "account_deletion_tokens"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid7()))
+    user_id = Column(
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    token_hash = Column(String(255), nullable=False, index=True, unique=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True), server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    # Relationships
+    user = relationship("User", back_populates="account_deletion_tokens")
 
 
 class RateLimitAttempt(Base):

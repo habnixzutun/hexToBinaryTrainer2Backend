@@ -80,7 +80,13 @@ def install_email_service(settings: Settings) -> EmailService:
 
     # Imported lazily to avoid pulling the router graph in at module load.
     from src.routers import auth, user
+    import src.services.auth_service as auth_svc
 
     auth.set_email_service(service)
     user.set_email_service(service)
+
+    # US-44: wire the same geolocation service into auth_service so that
+    # login() can resolve city/country without a router dependency.
+    auth_svc._geolocation_service = _default_geolocation_service
+
     return service

@@ -19,6 +19,8 @@ from src.migrations.v002_game_stats import run_migration as run_v002
 from src.migrations.v003_rate_limit import run_migration as run_v003
 from src.migrations.v004_xp_schema import run_migration as run_v004
 from src.migrations.v005_drop_user_stats import run_migration as run_v005
+from src.migrations.v006_device_tracking import run_migration as run_v006
+from src.migrations.v007_account_deletion import run_migration as run_v007
 from src.models.auth import UserIdentity
 from src.routers.auth import router as auth_router
 from src.routers.game import router as game_router
@@ -77,6 +79,11 @@ async def lifespan(app: FastAPI):
             # /profile, /leaderboard and /me (US-35/36/37) are the only readers.
             # Idempotent, and a no-op on a database that never ran v002.
             await run_v005(session)
+            # US-44: adds ip_address, user_agent, location_city, location_country
+            # to user_refresh_tokens so login sessions track device info.
+            await run_v006(session)
+            # US-47: creates account_deletion_tokens table for GDPR deletion flow.
+            await run_v007(session)
     except Exception:
         # exc_info, not str(e): the exception TYPE is the diagnostic here (a lost
         # connection, a permission denial and a half-applied migration all look the
