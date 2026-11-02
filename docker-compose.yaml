@@ -3,24 +3,9 @@ services:
     restart: unless-stopped
     build: .
     ports:
-      - "8000:8000"
-    environment:
-      - DB_USER=${DB_USER}
-      - DB_PW=${DB_PW}
-      - DB_NAME=${DB_NAME}
-      - DB_HOST=db
-      - DATABASE_URL=postgresql+asyncpg://${DB_USER}:${DB_PW}@db:5432/${DB_NAME}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
-      - FRONTEND_URL=${FRONTEND_URL}
-      - BASE_URL=${BASE_URL}
-      - JWT_SECRET=${JWT_SECRET}
-      - EMAIL_CHANGE_KEY=${EMAIL_CHANGE_KEY}
-      - SMTP_HOST=${SMTP_HOST}
-      - SMTP_PORT=${SMTP_PORT}
-      - SMTP_USER=${SMTP_USER}
-      - SMTP_PASSWORD=${SMTP_PASSWORD}
-      - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL}
-      - COOKIE_SECURE=${COOKIE_SECURE:-true}
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - .env
     depends_on:
       db:
         condition: service_healthy
@@ -42,8 +27,8 @@ services:
   db:
     image: postgres:15-alpine
     restart: always
-    ports:
-      - "5432:5432"
+    env_file:
+      - .env
     environment:
       - POSTGRES_USER=${DB_USER}
       - POSTGRES_PASSWORD=${DB_PW}
