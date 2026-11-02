@@ -676,3 +676,87 @@ def build_security_notification(action: str) -> tuple[str, str]:
         inner=inner,
     )
     return html_out, plain
+
+
+def build_account_deletion_request_email(confirm_url: str) -> tuple[str, str]:
+    """Account deletion confirmation: user must click link to confirm deletion."""
+    inner = (
+        '<div style="padding:40px 40px 32px;">\n'
+        f'<h1 style="margin:0 0 16px;font-size:24px;font-weight:700;'
+        f'color:{TEXT_COLOR};">\n'
+        "Confirm account deletion\n"
+        "</h1>\n"
+        f'<p style="margin:0 0 24px;color:{DIM_TEXT};font-size:16px;'
+        'line-height:1.6;">\n'
+        "We received a request to permanently delete your IT-Trainer account.\n"
+        "If you made this request, click the button below to confirm. "
+        "This action cannot be undone.\n"
+        "</p>\n"
+        '<div style="text-align:center;padding:8px 0;">\n'
+        f'{_button("Confirm account deletion", confirm_url)}\n'
+        "</div>\n"
+        f"{_link_block(confirm_url)}\n"
+        f'<p style="margin:24px 0 0;color:{DIM_TEXT};font-size:14px;'
+        'line-height:1.6;">\n'
+        f'This link expires in <strong style="color:{TEXT_COLOR};">'
+        "1 hour</strong>.\n"
+        "If you didn't request this, you can safely ignore this email &mdash;\n"
+        "your account will not be deleted.\n"
+        "</p>\n"
+        "</div>"
+    )
+    plain = (
+        "Confirm account deletion\n\n"
+        "We received a request to permanently delete your IT-Trainer account. "
+        "Open this link to confirm:\n"
+        f"{confirm_url}\n\n"
+        "The link expires in 1 hour.\n\n"
+        "If you didn't request this, you can safely ignore this email. "
+        "Your account will not be deleted."
+    )
+    html_out = _page(
+        title="Confirm account deletion",
+        preheader="Confirm permanent deletion of your IT-Trainer account. Link expires in 1 hour.",
+        inner=inner,
+    )
+    return html_out, plain
+
+
+def build_account_deleted_confirmation_email(username: str) -> tuple[str, str]:
+    """Info-only email sent after successful account deletion."""
+    safe_username = html.escape(username, quote=True)
+    inner = (
+        '<div style="padding:40px 40px 32px;">\n'
+        f'<h1 style="margin:0 0 16px;font-size:24px;font-weight:700;'
+        f'color:{TEXT_COLOR};">\n'
+        "Account deleted\n"
+        "</h1>\n"
+        f'<p style="margin:0 0 16px;color:{DIM_TEXT};font-size:16px;'
+        'line-height:1.6;">\n'
+        f"Hi <strong>{safe_username}</strong>,\n"
+        "</p>\n"
+        f'<p style="margin:0 0 16px;color:{DIM_TEXT};font-size:16px;'
+        'line-height:1.6;">\n'
+        "Your IT-Trainer account has been permanently deleted. "
+        "All your data including your game progress, XP, and streaks have been removed.\n"
+        "</p>\n"
+        f'<p style="margin:0;color:{DIM_TEXT};font-size:14px;'
+        'line-height:1.6;">\n'
+        "If you believe this was a mistake, please contact support.\n"
+        "</p>\n"
+        "</div>"
+    )
+    plain = (
+        f"Account deleted\n\n"
+        f"Hi {username},\n\n"
+        "Your IT-Trainer account has been permanently deleted. "
+        "All your data including your game progress, XP, and streaks have been removed.\n\n"
+        "If you believe this was a mistake, please contact support."
+    )
+    html_out = _page(
+        title="Account deleted",
+        preheader="Your IT-Trainer account has been permanently deleted.",
+        inner=inner,
+        footer="&copy; IT-Trainer &mdash; Practice hex, binary, decimal &amp; Unicode.",
+    )
+    return html_out, plain

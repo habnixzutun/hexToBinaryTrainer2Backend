@@ -1,6 +1,5 @@
 """Authentication service: login, refresh, logout business logic."""
 
-import hashlib
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, update
@@ -9,6 +8,8 @@ from uuid_utils import uuid7
 
 from src.models.auth import UserIdentity, UserRefreshToken
 from src.services.audit_service import log_audit_action, send_security_notification
+from src.services.geolocation_service import NullGeolocationService
+from src.utils.hash_token import hash_token as _hash_token
 from src.utils.jwt_utils import (
     REFRESH_TOKEN_TTL_DAYS,
     create_access_token,
@@ -17,17 +18,38 @@ from src.utils.jwt_utils import (
 )
 from src.utils.password import verify_password
 
+# US-44: module-level geolocation service; overridable in tests and replaced
+# at startup by install_email_service (which sets the real ip-api service).
+_geolocation_service = NullGeolocationService()
 
-def _hash_token(token: str) -> str:
-    return hashlib.sha256(token.encode()).hexdigest()
+
+def _parse_location(location: str) -> tuple[str | None, str | None]:
+    """Split a 'City, Country' string into (city, country).
+
+    Returns (None, None) when the location is 'unknown' or empty so that the
+    DB columns stay NULL rather than carrying the sentinel string "unknown".
+    """
+    if not location or location.strip().lower() == "unknown":
+        return None, None
+    parts = location.split(",", 1)
+    city = parts[0].strip() or None
+    country = parts[1].strip() if len(parts) > 1 else None
+    return city, country
 
 
 async def login(
     session: AsyncSession,
     email: str,
     password: str,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
 ) -> tuple[str, str]:
     """Validate credentials and return (access_token, refresh_token).
+
+    US-44: ip_address and user_agent are stored on the UserRefreshToken.
+    Geolocation is resolved from ip_address via the module-level
+    ``_geolocation_service`` (replaced at startup by install_email_service;
+    overridable in tests by monkeypatching ``auth_service._geolocation_service``).
 
     Raises:
         ValueError("unverified"): account exists but email not verified
@@ -50,6 +72,11 @@ async def login(
     if identity.verified_at is None:
         raise ValueError("unverified")
 
+    # US-44: resolve geolocation before committing the token so the columns
+    # are populated in the same transaction as the token creation.
+    location = await _geolocation_service.lookup(ip_address)
+    location_city, location_country = _parse_location(location)
+
     access_token = create_access_token(identity.user_id)
     refresh_token = create_refresh_token(identity.user_id)
 
@@ -58,6 +85,10 @@ async def login(
         user_id=identity.user_id,
         token_hash=_hash_token(refresh_token),
         expires_at=datetime.now(UTC) + timedelta(days=REFRESH_TOKEN_TTL_DAYS),
+        ip_address=ip_address,
+        user_agent=user_agent,
+        location_city=location_city,
+        location_country=location_country,
     )
     session.add(token_record)
     await session.commit()
@@ -77,6 +108,9 @@ async def refresh(
     (access_token, refresh_token) pair. The caller MUST persist the new
     refresh token to the client (e.g. via a httponly cookie) — otherwise
     the rotation is lost and the user cannot refresh again.
+
+    US-44: ip_address and user_agent are stored on the rotated token so the
+    device list reflects the client that last refreshed the session.
 
     Raises:
         ValueError("unauthorized"): token invalid, expired, or unknown
@@ -124,7 +158,8 @@ async def refresh(
     # Revoke the current token (rotation — single use)
     record.revoked_at = datetime.now(UTC)
 
-    # Create new refresh token
+    # Create new refresh token — carry ip/ua forward so the device list
+    # always reflects a known origin for this session.
     new_refresh_token = create_refresh_token(user_id)
     new_token_hash = _hash_token(new_refresh_token)
     new_record = UserRefreshToken(
@@ -132,6 +167,8 @@ async def refresh(
         user_id=user_id,
         token_hash=new_token_hash,
         expires_at=datetime.now(UTC) + timedelta(days=REFRESH_TOKEN_TTL_DAYS),
+        ip_address=ip_address,
+        user_agent=user_agent,
     )
     session.add(new_record)
 

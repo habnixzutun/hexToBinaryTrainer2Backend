@@ -877,11 +877,13 @@ async def test_lifespan_runs_every_migration_in_plan_order(monkeypatch):
     monkeypatch.setattr(main_module, "run_v003", _record("v003"))
     monkeypatch.setattr(main_module, "run_v004", _record("v004"))
     monkeypatch.setattr(main_module, "run_v005", _record("v005"))
+    monkeypatch.setattr(main_module, "run_v006", _record("v006"))
+    monkeypatch.setattr(main_module, "run_v007", _record("v007"))
 
     async with main_module.lifespan(main_module.app):
         pass
 
-    assert order == ["v001", "v002", "v003", "v004", "v005"]
+    assert order == ["v001", "v002", "v003", "v004", "v005", "v006", "v007"]
 
 
 async def test_the_whole_chain_applies_on_a_real_app_boot(
@@ -942,6 +944,8 @@ async def test_the_whole_chain_applies_on_a_real_app_boot(
         "v003_rate_limit",
         "v004_xp_schema",
         "v005_drop_user_stats",
+        "v006_device_tracking",
+        "v007_account_deletion",
     ]
 
 

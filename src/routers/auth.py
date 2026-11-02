@@ -1,5 +1,6 @@
 """Auth router: registration, email verification, login, refresh, logout."""
 
+import logging
 from datetime import UTC, datetime
 
 import jwt
@@ -12,8 +13,9 @@ from uuid_utils import uuid7
 
 from src.config import get_settings
 from src.database.engine import get_db
-from src.models.auth import User, UserIdentity
+from src.models.auth import User, UserIdentity, UserRefreshToken
 from src.models.auth_schemas import (
+    DeviceResponse,
     RegisterRequest,
     RegisterResponse,
     ResendVerificationRequest,
@@ -24,6 +26,7 @@ from src.services import auth_service, password_reset_service
 from src.services.audit_service import log_audit_action
 from src.services.email_service import EmailService, MockEmailService
 from src.services.rate_limit_service import RateLimitService
+from src.utils.hash_token import hash_token as _hash_token
 from src.utils.jwt_utils import create_verification_token, decode_token
 from src.utils.login_lockout import (
     check_login_lockout,
@@ -31,6 +34,8 @@ from src.utils.login_lockout import (
     reset_login_lockout,
 )
 from src.utils.password import hash_password, validate_password_strength
+
+logger = logging.getLogger(__name__)
 
 COOKIE_NAME = "refresh_token"
 COOKIE_MAX_AGE = 7 * 24 * 60 * 60  # 7 days in seconds
@@ -148,7 +153,11 @@ async def login(
 
     try:
         access_token, refresh_token = await auth_service.login(
-            session, body.email, body.password
+            session,
+            body.email,
+            body.password,
+            ip_address=client_ip,
+            user_agent=request.headers.get("user-agent"),
         )
     except ValueError as exc:
         # US-05: Record failed login attempt for adaptive lockout
@@ -347,7 +356,7 @@ async def register(
             await email_service.send_verification_email(body.email, verification_token)
         except Exception as e:
             # Log but don't fail registration if email can't be sent
-            print(f"[WARN] Could not send verification email: {e}")
+            logger.warning("Could not send verification email: %s", e)
 
     return RegisterResponse(
         message="If this email is available, a verification mail has been sent.",
@@ -533,3 +542,160 @@ async def reset_password(
         ) from None
 
     return {"message": "Password reset successful."}
+
+
+# ---------------------------------------------------------------------------
+# US-45: Device list
+# ---------------------------------------------------------------------------
+
+def _parse_user_agent(ua_string: str | None) -> tuple[str, str | None, str | None]:
+    """Parse a User-Agent string into (device_type, browser, os).
+
+    device_type is one of: 'Mobile', 'Tablet', 'PC', 'Unknown'.
+    browser and os may be None when the UA is absent or unparseable.
+    """
+    if not ua_string:
+        return "Unknown", None, None
+
+    try:
+        from user_agents import parse as ua_parse  # type: ignore[import]
+
+        ua = ua_parse(ua_string)
+        browser: str | None = ua.browser.family or None
+        os_name: str | None = ua.os.family or None
+
+        if ua.is_tablet:
+            device_type = "Tablet"
+        elif ua.is_mobile:
+            device_type = "Mobile"
+        elif ua.is_pc:
+            device_type = "PC"
+        else:
+            device_type = "Unknown"
+
+        return device_type, browser, os_name
+    except Exception:
+        return "Unknown", None, None
+
+
+@router.get("/devices", response_model=dict)
+async def list_devices(
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    """US-45: Return active sessions for the authenticated user.
+
+    Active means: not revoked AND not expired.
+    is_current=True for the entry whose token_hash matches the current
+    refresh cookie (if any).
+    """
+    now = datetime.now(UTC)
+
+    result = await session.execute(
+        select(UserRefreshToken).where(
+            UserRefreshToken.user_id == user_id,
+            UserRefreshToken.revoked_at.is_(None),
+            UserRefreshToken.expires_at > now,
+        )
+    )
+    tokens = result.scalars().all()
+
+    # Determine the hash of the current cookie (if present)
+    current_cookie = request.cookies.get(COOKIE_NAME)
+    current_hash: str | None = (
+        _hash_token(current_cookie) if current_cookie else None
+    )
+
+    devices: list[DeviceResponse] = []
+    for token in tokens:
+        device_type, browser, os_name = _parse_user_agent(token.user_agent)
+        is_current = current_hash is not None and token.token_hash == current_hash
+
+        # Serialise datetimes to ISO 8601 strings
+        created_at_val = token.created_at
+        if created_at_val is not None:
+            if hasattr(created_at_val, "tzinfo") and created_at_val.tzinfo is None:
+                created_at_val = created_at_val.replace(tzinfo=UTC)
+            created_str = created_at_val.isoformat()
+        else:
+            created_str = now.isoformat()
+
+        expires_at_val = token.expires_at
+        if hasattr(expires_at_val, "tzinfo") and expires_at_val.tzinfo is None:
+            expires_at_val = expires_at_val.replace(tzinfo=UTC)
+        expires_str = expires_at_val.isoformat()
+
+        devices.append(
+            DeviceResponse(
+                id=token.id,
+                device_type=device_type,
+                browser=browser,
+                os=os_name,
+                ip_address=token.ip_address,
+                location_city=token.location_city,
+                location_country=token.location_country,
+                created_at=created_str,
+                expires_at=expires_str,
+                is_current=is_current,
+            )
+        )
+
+    return {"devices": [d.model_dump() for d in devices]}
+
+
+# ---------------------------------------------------------------------------
+# US-46: Single device logout (revoke one session by token_id)
+# ---------------------------------------------------------------------------
+
+
+@router.delete("/devices/{token_id}", status_code=status.HTTP_200_OK)
+async def revoke_device(
+    token_id: str,
+    request: Request,
+    response: Response,
+    user_id: str = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_db),
+) -> dict:
+    """US-46: Revoke a single active session by its token primary-key ID.
+
+    Returns 404 when:
+    - token_id does not exist
+    - token belongs to a different user
+    - token is already revoked
+    - token is expired (not a usable session)
+
+    When the revoked token matches the caller's current refresh cookie the
+    cookie is cleared so the client is immediately logged out.
+    """
+    now = datetime.now(UTC)
+
+    result = await session.execute(
+        select(UserRefreshToken).where(UserRefreshToken.id == token_id)
+    )
+    record = result.scalar_one_or_none()
+
+    # 404 for non-existent, foreign-user, already-revoked, or expired tokens
+    if record is None or record.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    if record.revoked_at is not None:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    expires_at = record.expires_at
+    if hasattr(expires_at, "tzinfo") and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at < now:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    # Revoke the token
+    record.revoked_at = now
+    await session.commit()
+
+    # If this was the caller's current session, clear the cookie
+    current_cookie = request.cookies.get(COOKIE_NAME)
+    if current_cookie and _hash_token(current_cookie) == record.token_hash:
+        _delete_refresh_cookie(response)
+
+    return {"revoked": True}
+

@@ -11,15 +11,22 @@ from datetime import UTC, datetime, timedelta
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.config import get_settings
 from src.database.engine import get_db
 from src.models.auth import User, UserIdentity
+from src.services.account_deletion_service import (
+    confirm_account_deletion,
+    request_account_deletion,
+)
 from src.services.audit_service import log_audit_action, send_security_notification
 from src.services.email_service import EmailService, MockEmailService
 from src.services.profile_service import load_snapshot
+from src.services.rate_limit_service import RateLimitService
 from src.services.user_service import change_password
 from src.utils.email_change_token import (
     create_email_change_token,
@@ -28,6 +35,12 @@ from src.utils.email_change_token import (
 from src.utils.jwt_utils import decode_token
 
 USERNAME_CHANGE_COOLDOWN_DAYS = 7
+
+SECONDS_PER_HOUR = 3600
+# US-48: rate limit for the unauthenticated deletion-confirm endpoint.
+# Bounded bcrypt calls: 5 attempts per IP per hour.
+DELETION_CONFIRM_RATE_LIMIT_MAX = 5
+DELETION_CONFIRM_RATE_LIMIT_WINDOW_SECONDS = SECONDS_PER_HOUR
 
 _default_email_service: EmailService = MockEmailService()
 
@@ -448,3 +461,120 @@ async def change_password_endpoint(
     return {
         "message": "Password changed successfully. All sessions have been invalidated."
     }
+
+
+# ---------------------------------------------------------------------------
+# US-47 / US-48: Account Deletion
+# ---------------------------------------------------------------------------
+
+
+class AccountDeletionConfirmRequest(BaseModel):
+    token: str = Field(..., max_length=2048)  # JWT max ~2 KB
+    password: str = Field(..., max_length=128)  # match RegisterRequest password limit
+
+
+@router.post("/api/users/me/delete/request", status_code=status.HTTP_200_OK)
+async def request_account_deletion_endpoint(
+    request: Request,
+    session: AsyncSession = Depends(get_db),
+    email_service: EmailService = Depends(get_email_service),
+) -> dict:
+    """POST /api/users/me/delete/request — US-47.
+
+    Requires a valid Bearer access token. Generates a time-limited deletion
+    token, stores its hash in account_deletion_tokens, and sends a
+    confirmation email to the authenticated user.
+
+    Returns:
+        200 {"message": "Confirmation email sent"}
+    """
+    user_id = _extract_bearer_user_id(request)
+
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found.",
+        )
+
+    await request_account_deletion(
+        session=session,
+        user_id=user_id,
+        email=user.email,
+        username=user.username,
+        email_service=email_service,
+    )
+
+    return {"message": "Confirmation email sent"}
+
+
+@router.post("/api/users/me/delete/confirm", status_code=status.HTTP_200_OK)
+async def confirm_account_deletion_endpoint(
+    request: Request,
+    body: AccountDeletionConfirmRequest,
+    session: AsyncSession = Depends(get_db),
+    email_service: EmailService = Depends(get_email_service),
+) -> dict:
+    """POST /api/users/me/delete/confirm — US-48.
+
+    Does NOT require a Bearer token (the signed deletion token in the body
+    proves identity). Validates the token, verifies the password, deletes
+    the user, clears the refresh-token cookie, and sends a confirmation email.
+
+    Returns:
+        200 {"message": "Account deleted"}
+    """
+    # Rate-limit this unauthenticated endpoint to prevent CPU-exhaustion via
+    # bcrypt (5 attempts per IP per hour).
+    client_ip = request.client.host if request.client else "unknown"
+    rate_limit = RateLimitService(session)
+    if not await rate_limit.check(
+        f"delete_confirm:{client_ip}",
+        limit=DELETION_CONFIRM_RATE_LIMIT_MAX,
+        window_seconds=DELETION_CONFIRM_RATE_LIMIT_WINDOW_SECONDS,
+    ):
+        raise HTTPException(status_code=429, detail="Too many requests.")
+
+    try:
+        await confirm_account_deletion(
+            session=session,
+            raw_token=body.token,
+            password=body.password,
+            email_service=email_service,
+        )
+    except ValueError as exc:
+        reason = str(exc)
+        if reason == "expired":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Deletion token has expired.",
+            ) from None
+        if reason == "wrong_password":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Password is incorrect.",
+            ) from None
+        if reason == "already_used":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Deletion token has already been used.",
+            ) from None
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired deletion token.",
+        ) from None
+
+    response = JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"message": "Account deleted"},
+    )
+    # Clear the refresh-token cookie using the same settings as auth.py
+    # to ensure consistency across environments (dev vs. production).
+    response.delete_cookie(
+        key="refresh_token",
+        httponly=True,
+        secure=get_settings().cookie_secure,
+        samesite="strict",
+    )
+    return response

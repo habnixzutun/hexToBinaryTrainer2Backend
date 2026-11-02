@@ -8,6 +8,8 @@ from email.mime.text import MIMEText
 from typing import Protocol
 
 from src.services.email_templates import (
+    build_account_deleted_confirmation_email,
+    build_account_deletion_request_email,
     build_email_change_verification,
     build_password_reset_email,
     build_security_notification,
@@ -26,6 +28,14 @@ class EmailService(Protocol):
     ) -> None: ...
     async def send_security_notification_email(
         self, to_email: str, action: str
+    ) -> None: ...
+
+    async def send_account_deletion_request_email(
+        self, to_email: str, token: str
+    ) -> None: ...
+
+    async def send_account_deleted_confirmation_email(
+        self, to_email: str, username: str
     ) -> None: ...
 
     async def send_raw_email(
@@ -59,6 +69,28 @@ class MockEmailService:
     ) -> None:
         self.sent.append(
             {"to": to_email, "action": action, "type": "security_notification"}
+        )
+
+    async def send_account_deletion_request_email(
+        self, to_email: str, token: str
+    ) -> None:
+        self.sent.append(
+            {
+                "to": to_email,
+                "token": token,
+                "type": "account_deletion_confirmation",
+            }
+        )
+
+    async def send_account_deleted_confirmation_email(
+        self, to_email: str, username: str
+    ) -> None:
+        self.sent.append(
+            {
+                "to": to_email,
+                "username": username,
+                "type": "account_deleted",
+            }
         )
 
     async def send_raw_email(
@@ -174,6 +206,21 @@ class SMTPEmailService:
     ) -> None:
         html, plain_text = build_security_notification(action)
         await self._send(to_email, "Security notification", html, plain_text)
+
+    async def send_account_deletion_request_email(
+        self, to_email: str, token: str
+    ) -> None:
+        from src.config import get_settings
+
+        confirm_url = f"{self._base_url}/delete-account/confirm?token={token}"
+        html, plain_text = build_account_deletion_request_email(confirm_url)
+        await self._send(to_email, "Confirm account deletion", html, plain_text)
+
+    async def send_account_deleted_confirmation_email(
+        self, to_email: str, username: str
+    ) -> None:
+        html, plain_text = build_account_deleted_confirmation_email(username)
+        await self._send(to_email, "Your account has been deleted", html, plain_text)
 
     async def send_raw_email(
         self,

@@ -248,6 +248,7 @@ _ME_FIELDS: frozenset[str] = frozenset(
         "best_streak",
         "correct_count",
         "incorrect_count",
+        "next_username_change_at",  # US-19: cooldown hint for the settings dialog
     }
 )
 
