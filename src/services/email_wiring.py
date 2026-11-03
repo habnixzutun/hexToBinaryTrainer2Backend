@@ -79,8 +79,8 @@ def install_email_service(settings: Settings) -> EmailService:
         logger.info("Using null geolocation service (development)")
 
     # Imported lazily to avoid pulling the router graph in at module load.
-    from src.routers import auth, user
     import src.services.auth_service as auth_svc
+    from src.routers import auth, user
 
     auth.set_email_service(service)
     user.set_email_service(service)

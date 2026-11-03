@@ -716,7 +716,10 @@ def build_account_deletion_request_email(confirm_url: str) -> tuple[str, str]:
     )
     html_out = _page(
         title="Confirm account deletion",
-        preheader="Confirm permanent deletion of your IT-Trainer account. Link expires in 1 hour.",
+        preheader=(
+            "Confirm permanent deletion of your IT-Trainer account."
+            " Link expires in 1 hour."
+        ),
         inner=inner,
     )
     return html_out, plain
@@ -738,7 +741,8 @@ def build_account_deleted_confirmation_email(username: str) -> tuple[str, str]:
         f'<p style="margin:0 0 16px;color:{DIM_TEXT};font-size:16px;'
         'line-height:1.6;">\n'
         "Your IT-Trainer account has been permanently deleted. "
-        "All your data including your game progress, XP, and streaks have been removed.\n"
+        "All your data including your game progress, XP, and streaks"
+        " have been removed.\n"
         "</p>\n"
         f'<p style="margin:0;color:{DIM_TEXT};font-size:14px;'
         'line-height:1.6;">\n'
@@ -750,7 +754,8 @@ def build_account_deleted_confirmation_email(username: str) -> tuple[str, str]:
         f"Account deleted\n\n"
         f"Hi {username},\n\n"
         "Your IT-Trainer account has been permanently deleted. "
-        "All your data including your game progress, XP, and streaks have been removed.\n\n"
+        "All your data including your game progress, XP, and streaks"
+        " have been removed.\n\n"
         "If you believe this was a mistake, please contact support."
     )
     html_out = _page(

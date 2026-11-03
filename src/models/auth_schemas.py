@@ -1,6 +1,5 @@
 """Pydantic schemas for authentication request/response bodies (US-13)."""
 
-from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field
 

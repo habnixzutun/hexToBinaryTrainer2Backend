@@ -210,7 +210,6 @@ class SMTPEmailService:
     async def send_account_deletion_request_email(
         self, to_email: str, token: str
     ) -> None:
-        from src.config import get_settings
 
         confirm_url = f"{self._base_url}/delete-account/confirm?token={token}"
         html, plain_text = build_account_deletion_request_email(confirm_url)
